@@ -36,13 +36,7 @@ npm run dev -- --host
 6. Оставь Custom CSS пустым.
 7. Нажми по источнику правой кнопкой: `Transform -> Reset Transform`.
 8. Затем: `Transform -> Fit to Screen`.
-9. Размести Browser Source выше игры или захвата экрана.
-
-Если стример находится в другом городе, `localhost` не подойдет. Проект нужно развернуть на VPS с доменом и HTTPS, а стримеру дать публичную ссылку вида:
-
-```text
-https://your-domain.example/overlay/<token>
-```
+9. Размести Browser Source в самом верху источников.
 
 ## Как это работает
 
