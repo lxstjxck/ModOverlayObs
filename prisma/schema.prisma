@@ -1,0 +1,190 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN_MODERATOR
+  MODERATOR
+}
+
+enum MediaType {
+  IMAGE
+  GIF
+  VIDEO
+  AUDIO
+}
+
+enum ElementType {
+  IMAGE
+  GIF
+  VIDEO
+  AUDIO
+  TEXT
+}
+
+model User {
+  id              String     @id @default(cuid())
+  username        String     @unique
+  displayName     String
+  passwordHash    String
+  role            Role       @default(MODERATOR)
+  permissionsJson String     @default("{}")
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  sessions        Session[]
+  media           Media[]
+  auditLogs       AuditLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Streamer {
+  id              String           @id @default(cuid())
+  displayName     String
+  overlayToken    String           @unique
+  canvasWidth     Int              @default(1920)
+  canvasHeight    Int              @default(1080)
+  settingsJson    String           @default("{}")
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  media           Media[]
+  previewElements PreviewElement[]
+  liveInstances   LiveInstance[]
+  auditLogs       AuditLog[]
+}
+
+model Media {
+  id             String           @id @default(cuid())
+  streamerId     String
+  filename       String           @unique
+  originalName   String
+  mimeType       String
+  type           MediaType
+  size           Int
+  url            String
+  durationMs     Int?
+  width          Int?
+  height         Int?
+  uploadedById   String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  streamer       Streamer         @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  uploadedBy     User?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  previewElements PreviewElement[]
+  liveInstances  LiveInstance[]
+  auditLogs      AuditLog[]
+
+  @@index([streamerId])
+  @@index([uploadedById])
+}
+
+model PreviewElement {
+  id            String      @id @default(cuid())
+  streamerId    String
+  mediaId       String?
+  type          ElementType
+  name          String
+  src           String?
+  text          String?
+  x             Float       @default(100)
+  y             Float       @default(100)
+  width         Float       @default(320)
+  height        Float       @default(180)
+  rotation      Float       @default(0)
+  opacity       Float       @default(1)
+  zIndex        Int         @default(1)
+  visible       Boolean     @default(true)
+  durationMs    Int?
+  animationIn   String      @default("none")
+  animationOut  String      @default("none")
+  previewVolume Float       @default(1)
+  liveVolume    Float       @default(1)
+  muted         Boolean     @default(false)
+  loop          Boolean     @default(false)
+  startTime     Float       @default(0)
+  propsJson     String      @default("{}")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  streamer      Streamer    @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  media         Media?      @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([streamerId])
+  @@index([mediaId])
+}
+
+model LiveInstance {
+  id               String      @id @default(cuid())
+  streamerId       String
+  previewElementId String?
+  mediaId          String?
+  type             ElementType
+  name             String
+  src              String?
+  text             String?
+  x                Float       @default(100)
+  y                Float       @default(100)
+  width            Float       @default(320)
+  height           Float       @default(180)
+  rotation         Float       @default(0)
+  opacity          Float       @default(1)
+  zIndex           Int         @default(1)
+  visible          Boolean     @default(true)
+  durationMs       Int?
+  animationIn      String      @default("none")
+  animationOut     String      @default("none")
+  liveVolume       Float       @default(1)
+  muted            Boolean     @default(false)
+  loop             Boolean     @default(false)
+  startTime        Float       @default(0)
+  propsJson        String      @default("{}")
+  startedAt        DateTime    @default(now())
+  endsAt           DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  streamer         Streamer    @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  media            Media?      @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([streamerId])
+  @@index([previewElementId])
+  @@index([mediaId])
+  @@index([endsAt])
+}
+
+model AuditLog {
+  id           String    @id @default(cuid())
+  timestamp    DateTime  @default(now())
+  userId       String?
+  streamerId   String
+  action       String
+  mediaId      String?
+  metadataJson String    @default("{}")
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  streamer     Streamer  @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  media        Media?    @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([streamerId])
+  @@index([mediaId])
+}
+
+model Settings {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}

@@ -1,0 +1,15 @@
+services:
+  moderator-overlay:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-4000}:4000"
+    env_file:
+      - .env
+    environment:
+      PORT: 4000
+      DATABASE_URL: file:../database/modoverlay.db
+      UPLOAD_DIR: uploads
+    volumes:
+      - ./database:/app/database
+      - ./uploads:/app/uploads
