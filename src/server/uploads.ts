@@ -18,6 +18,15 @@ export interface ValidatedUpload {
 }
 
 const tmpDir = path.join(config.uploadDir, ".tmp");
+let pendingCommit: Promise<unknown> = Promise.resolve();
+
+// Avoid SQLite lock contention within this process. The DB transaction remains
+// responsible for enforcing the quota atomically.
+export function withUploadCommit<T>(action: () => Promise<T>): Promise<T> {
+  const result = pendingCommit.then(action);
+  pendingCommit = result.catch(() => undefined);
+  return result;
+}
 
 export const uploadMiddleware = multer({
   dest: tmpDir,
@@ -103,7 +112,7 @@ async function readHead(filePath: string): Promise<Buffer> {
 async function safeUnlink(filePath: string): Promise<void> {
   try {
     await fs.unlink(filePath);
-  } catch {
-    // File is already gone.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

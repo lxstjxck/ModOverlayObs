@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   await ensureRuntimeState();
 
   const app = express();
-  app.set("trust proxy", true);
+  app.set("trust proxy", false);
   app.use(express.json({ limit: "1mb" }));
   app.use(applySecurityHeaders);
   configureUploads(app);

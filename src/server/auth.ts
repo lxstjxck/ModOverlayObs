@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import type { PermissionFlag, UserView } from "../shared/types";
 import { config, isProduction } from "./config";
 import { prisma } from "./db";
+import { accessRevocation } from "./accessRevocation";
 import { hasPermission, parsePermissions } from "./permissions";
 
 export const sessionCookieName = "mod_overlay_session";
@@ -64,6 +65,7 @@ export async function destroySession(request: Request, response: Response): Prom
   const token = readSessionToken(request.headers.cookie);
   if (token) {
     await prisma.session.deleteMany({ where: { tokenHash: hashSessionToken(token) } });
+    accessRevocation.emit("session", hashSessionToken(token));
   }
   response.clearCookie(sessionCookieName, { path: "/" });
 }
@@ -76,19 +78,22 @@ export function readSessionToken(cookieHeader?: string): string | null {
   return cookies[sessionCookieName] ?? null;
 }
 
-export async function getUserFromCookieHeader(cookieHeader?: string) {
+export async function getSessionFromCookieHeader(cookieHeader?: string) {
   const token = readSessionToken(cookieHeader);
   if (!token) {
     return null;
   }
-  const session = await prisma.session.findFirst({
+  return prisma.session.findFirst({
     where: {
       tokenHash: hashSessionToken(token),
       expiresAt: { gt: new Date() }
     },
     include: { user: true }
   });
-  return session?.user ?? null;
+}
+
+export async function getUserFromCookieHeader(cookieHeader?: string) {
+  return (await getSessionFromCookieHeader(cookieHeader))?.user ?? null;
 }
 
 export async function getUserFromRequest(request: Request) {

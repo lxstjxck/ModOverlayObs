@@ -154,36 +154,39 @@ export function CanvasStage({
           }}
         >
           {mode === "workspace" && <WorkspaceZones streamer={streamer} bounds={bounds} />}
-          {sortElements(elements)
-            .map((element) => (
-              <div
-                key={element.id}
-                className={`stage-element ${selectedId === element.id ? "selected" : ""} ${
-                  element.visible ? "" : "is-hidden"
-                }`}
-                style={{
-                  left: `${((element.x - bounds.minX) / bounds.width) * 100}%`,
-                  top: `${((element.y - bounds.minY) / bounds.height) * 100}%`,
-                  width: `${(element.width / bounds.width) * 100}%`,
-                  height: `${(element.height / bounds.height) * 100}%`,
-                  opacity: element.opacity,
-                  zIndex: element.zIndex + 1000,
-                  transform: `rotate(${element.rotation}deg)`
-                }}
-                onPointerDown={(event) => startDrag(event, element, "move")}
-              >
-                <ElementContent mode={mode} element={element} onUpdate={onUpdate} />
-                {mode === "workspace" && selectedId === element.id && (
-                  <ResizeHandles onStart={(event, handle) => startDrag(event, element, "resize", handle)} />
-                )}
-                {mode === "workspace" && !element.visible && (
-                  <span className="hidden-pill">
-                    <EyeOff size={12} /> Hidden
-                  </span>
-                )}
-              </div>
-            ))}
-          {mode === "workspace" && elements.length === 0 && <div className="empty-stage">No assets</div>}
+          {sortElements(elements).map((element) => (
+            <div
+              key={element.id}
+              className={`stage-element ${selectedId === element.id ? "selected" : ""} ${
+                element.visible ? "" : "is-hidden"
+              }`}
+              style={{
+                left: `${((element.x - bounds.minX) / bounds.width) * 100}%`,
+                top: `${((element.y - bounds.minY) / bounds.height) * 100}%`,
+                width: `${(element.width / bounds.width) * 100}%`,
+                height: `${(element.height / bounds.height) * 100}%`,
+                opacity: element.opacity,
+                zIndex: element.zIndex + 1000,
+                transform: `rotate(${element.rotation}deg)`
+              }}
+              onPointerDown={(event) => startDrag(event, element, "move")}
+            >
+              <ElementContent mode={mode} element={element} />
+              {mode === "workspace" && selectedId === element.id && (
+                <ResizeHandles
+                  onStart={(event, handle) => startDrag(event, element, "resize", handle)}
+                />
+              )}
+              {mode === "workspace" && !element.visible && (
+                <span className="hidden-pill">
+                  <EyeOff size={12} /> Hidden
+                </span>
+              )}
+            </div>
+          ))}
+          {mode === "workspace" && elements.length === 0 && (
+            <div className="empty-stage">No assets</div>
+          )}
         </div>
       </div>
     </section>
@@ -503,7 +506,12 @@ function applyCrop(
   };
 }
 
-function getCrop(element: OverlayElement): { left: number; right: number; top: number; bottom: number } {
+function getCrop(element: OverlayElement): {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+} {
   return {
     left: getNumberProp(element.props, "cropLeft", 0),
     right: getNumberProp(element.props, "cropRight", 0),
@@ -529,12 +537,10 @@ function SafeGuides() {
 
 function ElementContent({
   element,
-  mode,
-  onUpdate
+  mode
 }: {
   element: OverlayElement;
   mode: CanvasStageProps["mode"];
-  onUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
 }) {
   if (element.type === "TEXT") {
     const props = element.props;
@@ -549,8 +555,6 @@ function ElementContent({
     return (
       <div
         className="text-element"
-        contentEditable={mode === "workspace"}
-        suppressContentEditableWarning
         style={{
           color,
           background,
@@ -559,16 +563,16 @@ function ElementContent({
           fontWeight,
           WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px ${stroke}` : undefined,
           textShadow: shadow ? "0 2px 10px rgba(0,0,0,.55)" : undefined,
-          justifyContent: getStringProp(props, "align", "left") === "center" ? "center" : "flex-start"
+          justifyContent:
+            getStringProp(props, "align", "left") === "center" ? "center" : "flex-start"
         }}
-        onBlur={(event) => onUpdate?.(element.id, { text: event.currentTarget.textContent ?? "" })}
       >
         {element.text}
       </div>
     );
   }
 
-  if (element.type === "VIDEO") {
+  if (element.type === "VIDEO" || element.type === "AUDIO") {
     const youtubeSrc = buildYouTubeEmbedUrl(element.src, {
       origin: getWindowOrigin()
     });
@@ -580,6 +584,7 @@ function ElementContent({
           data-preview-media-id={mode === "workspace" ? element.id : undefined}
           data-overlay-media-id={mode === "overlay" ? element.id : undefined}
           src={youtubeSrc}
+          referrerPolicy="strict-origin-when-cross-origin"
           title={element.name}
           allow="autoplay; encrypted-media; picture-in-picture"
           allowFullScreen
@@ -592,6 +597,9 @@ function ElementContent({
         />
       );
     }
+  }
+
+  if (element.type === "VIDEO") {
     return (
       <video
         className="media-element"

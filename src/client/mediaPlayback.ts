@@ -89,3 +89,47 @@ function sendYouTubeCommand(frame: HTMLIFrameElement, func: string, args: unknow
     }, delay);
   }
 }
+
+export function seekMediaNode(node: PlayableNode | null, seconds: number): void {
+  if (!node || !Number.isFinite(seconds)) return;
+  const time = Math.max(0, seconds);
+  if (node instanceof HTMLMediaElement) {
+    node.currentTime = time;
+  } else {
+    sendYouTubeCommand(node, "seekTo", [time, true]);
+  }
+}
+
+export function observeYouTubeTime(
+  frame: HTMLIFrameElement,
+  onTime: (time: { current: number; duration: number }) => void
+): () => void {
+  let current = 0;
+  let duration = 0;
+  const listen = () =>
+    frame.contentWindow?.postMessage(
+      JSON.stringify({ event: "listening", id: "overlay-time" }),
+      "https://www.youtube.com"
+    );
+  const receive = (event: MessageEvent) => {
+    if (event.origin !== "https://www.youtube.com" || event.source !== frame.contentWindow) return;
+    try {
+      const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      if (data?.event !== "infoDelivery" || !data.info) return;
+      if (Number.isFinite(data.info.currentTime)) current = Math.max(0, data.info.currentTime);
+      if (Number.isFinite(data.info.duration)) duration = Math.max(0, data.info.duration);
+      onTime({ current, duration });
+    } catch {
+      /* Ignore unrelated player messages. */
+    }
+  };
+  window.addEventListener("message", receive);
+  frame.addEventListener("load", listen);
+  const timer = window.setInterval(listen, 1000);
+  listen();
+  return () => {
+    window.removeEventListener("message", receive);
+    frame.removeEventListener("load", listen);
+    window.clearInterval(timer);
+  };
+}

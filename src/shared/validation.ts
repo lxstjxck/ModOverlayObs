@@ -16,14 +16,25 @@ export const elementPatchSchema = z
     opacity: z.number().finite().min(0).max(1).optional(),
     zIndex: z.number().int().min(-1000).max(1000).optional(),
     visible: z.boolean().optional(),
-    durationMs: z.number().int().min(100).max(24 * 60 * 60 * 1000).nullable().optional(),
+    durationMs: z
+      .number()
+      .int()
+      .min(100)
+      .max(24 * 60 * 60 * 1000)
+      .nullable()
+      .optional(),
     animationIn: animationSchema.optional(),
     animationOut: animationSchema.optional(),
     previewVolume: z.number().finite().min(0).max(1).optional(),
     liveVolume: z.number().finite().min(0).max(1).optional(),
     muted: z.boolean().optional(),
     loop: z.boolean().optional(),
-    startTime: z.number().finite().min(0).max(24 * 60 * 60).optional(),
+    startTime: z
+      .number()
+      .finite()
+      .min(0)
+      .max(24 * 60 * 60)
+      .optional(),
     props: z.record(z.string(), z.unknown()).optional()
   })
   .strict();
@@ -44,7 +55,7 @@ export const previewAddSchema = z
 export const mediaUrlSchema = z
   .object({
     url: z.string().url().max(2048),
-    type: z.enum(["VIDEO", "AUDIO"]),
+    type: z.enum(["IMAGE", "GIF", "VIDEO", "AUDIO"]),
     name: z.string().trim().min(1).max(180).optional()
   })
   .strict()

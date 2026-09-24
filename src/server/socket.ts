@@ -8,7 +8,13 @@ import {
   liveUpdateSchema,
   previewAddSchema
 } from "../shared/validation";
-import { getUserFromCookieHeader } from "./auth";
+import {
+  getUserFromCookieHeader,
+  getSessionFromCookieHeader,
+  readSessionToken,
+  hashSessionToken
+} from "./auth";
+import { accessRevocation } from "./accessRevocation";
 import { prisma } from "./db";
 import { hasPermission } from "./permissions";
 import { isOriginAllowed, WindowRateLimiter } from "./security";
@@ -68,80 +74,128 @@ export function configureSocket(httpServer: HttpServer): Server {
   });
 
   io.use(async (socket, next) => {
+    const token = readStringQuery(socket.handshake.query.overlayToken);
+    const sessionToken = readSessionToken(socket.handshake.headers.cookie);
+    const sessionHash = sessionToken ? hashSessionToken(sessionToken) : null;
+    let revoked = false;
+    let expiryTimer: NodeJS.Timeout | undefined;
+    const revoke = () => {
+      revoked = true;
+      socket.emit("access:revoked");
+      socket.disconnect(true);
+    };
+    const onSessionRevoked = (hash: string) => {
+      if (hash === sessionHash) revoke();
+    };
+    const onOverlayRevoked = (oldToken: string) => {
+      if (token === oldToken) revoke();
+    };
+    const cleanup = () => {
+      accessRevocation.off("session", onSessionRevoked);
+      accessRevocation.off("overlay", onOverlayRevoked);
+      clearTimeout(expiryTimer);
+    };
+    accessRevocation.on("session", onSessionRevoked);
+    accessRevocation.on("overlay", onOverlayRevoked);
+    socket.once("disconnect", cleanup);
+    socket.conn.once("close", cleanup);
+    const finish: typeof next = (error) => {
+      if (error || revoked) cleanup();
+      next(error ?? (revoked ? new Error("Access revoked") : undefined));
+    };
     try {
       if (!isOriginAllowed(socket.handshake.headers.origin)) {
-        next(new Error("Request origin is not allowed"));
+        finish(new Error("Request origin is not allowed"));
         return;
       }
       const connectionLimit = socketConnectionLimiter.consume(
         `socket:connect:${socket.handshake.address || "unknown"}`
       );
       if (!connectionLimit.allowed) {
-        next(new Error("Too many socket connections. Try again later."));
+        finish(new Error("Too many socket connections. Try again later."));
         return;
       }
 
-      const token = readStringQuery(socket.handshake.query.overlayToken);
       if (token) {
         const streamer = await prisma.streamer.findUnique({ where: { overlayToken: token } });
         if (!streamer) {
-          next(new Error("Invalid overlay token"));
+          finish(new Error("Invalid overlay token"));
           return;
         }
         contexts.set(socket, { kind: "overlay", streamerId: streamer.id });
-        next();
+        finish();
         return;
       }
 
-      const user = await getUserFromCookieHeader(socket.handshake.headers.cookie);
-      if (!user) {
-        next(new Error("Authentication required"));
+      const session = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
+      if (!session) {
+        finish(new Error("Authentication required"));
         return;
       }
       const streamer = await getDefaultStreamer();
-      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user });
-      next();
+      if (session.expiresAt.getTime() <= Date.now()) {
+        finish(new Error("Session expired"));
+        return;
+      }
+      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.user });
+      expiryTimer = setTimeout(revoke, Math.max(0, session.expiresAt.getTime() - Date.now()));
+      expiryTimer.unref();
+      finish();
     } catch (error) {
-      next(error instanceof Error ? error : new Error("Socket authentication failed"));
+      finish(error instanceof Error ? error : new Error("Socket authentication failed"));
     }
   });
 
   io.on("connection", async (socket) => {
-    const context = contexts.get(socket);
-    if (!context) {
+    try {
+      const context = contexts.get(socket);
+      if (!context) {
+        socket.disconnect(true);
+        return;
+      }
+
+      if (context.kind === "overlay") {
+        await handleOverlayConnection(io, socket, context.streamerId);
+        return;
+      }
+
+      await handleModeratorConnection(io, socket, context.streamerId, context.user);
+    } catch {
       socket.disconnect(true);
-      return;
     }
-
-    if (context.kind === "overlay") {
-      await handleOverlayConnection(io, socket, context.streamerId);
-      return;
-    }
-
-    await handleModeratorConnection(io, socket, context.streamerId, context.user);
   });
 
   void restoreLiveTimers(io);
-  setInterval(() => {
+  const cleanupTimer = setInterval(() => {
     void cleanupExpiredAndBroadcast(io);
   }, 5_000).unref();
+  httpServer.once("close", () => {
+    clearInterval(cleanupTimer);
+    clearAllTimers();
+  });
 
   return io;
 }
 
-async function handleOverlayConnection(io: Server, socket: Socket, streamerId: string): Promise<void> {
+async function handleOverlayConnection(
+  io: Server,
+  socket: Socket,
+  streamerId: string
+): Promise<void> {
+  if (!socket.connected) return;
   socket.join(overlayRoom(streamerId));
   const overlays = overlaysByStreamer.get(streamerId) ?? new Set<string>();
   overlays.add(socket.id);
   overlaysByStreamer.set(streamerId, overlays);
 
-  socket.emit("overlay:state", await getPreviewState(streamerId));
-  emitPresence(io, streamerId);
-
   socket.on("disconnect", () => {
     overlaysByStreamer.get(streamerId)?.delete(socket.id);
     emitPresence(io, streamerId);
   });
+  const state = await getPreviewState(streamerId);
+  if (!socket.connected) return;
+  socket.emit("overlay:state", state);
+  emitPresence(io, streamerId);
 }
 
 async function handleModeratorConnection(
@@ -150,17 +204,24 @@ async function handleModeratorConnection(
   streamerId: string,
   user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>
 ): Promise<void> {
+  if (!socket.connected) return;
   socket.join(moderatorRoom(streamerId));
   const moderators = moderatorsByStreamer.get(streamerId) ?? new Map();
   moderators.set(socket.id, { id: user.id, displayName: user.displayName });
   moderatorsByStreamer.set(streamerId, moderators);
 
+  socket.on("disconnect", () => {
+    moderatorsByStreamer.get(streamerId)?.delete(socket.id);
+    emitPresence(io, streamerId);
+  });
+
   socket.emit("preview:state", await getPreviewState(streamerId));
   socket.emit("live:state", await getLiveState(streamerId));
+  if (!socket.connected) return;
   emitPresence(io, streamerId);
 
   socket.on("preview:add", async (payload) => {
-    await guarded(socket, user, "canEditPreview", async () => {
+    await guarded(socket, user, "canEditPreview", async (user) => {
       const parsed = previewAddSchema.parse(payload);
       if (parsed.type === "TEXT") {
         assertAllowed(user, "canCreateText");
@@ -171,8 +232,8 @@ async function handleModeratorConnection(
     });
   });
 
-  socket.on("preview:update", async (payload) => {
-    await guarded(socket, user, "canEditPreview", async () => {
+  socket.on("preview:update", async (payload, acknowledge) => {
+    const ok = await guarded(socket, user, "canEditPreview", async () => {
       const parsed = idSchema
         .extend({
           patch: elementPatchSchema
@@ -181,10 +242,11 @@ async function handleModeratorConnection(
       await updatePreviewElement(streamerId, parsed.id, parsed.patch);
       await emitPreviewState(io, streamerId);
     });
+    if (typeof acknowledge === "function") acknowledge(ok);
   });
 
   socket.on("preview:duplicate", async (payload) => {
-    await guarded(socket, user, "canEditPreview", async () => {
+    await guarded(socket, user, "canEditPreview", async (user) => {
       const parsed = idSchema.parse(payload);
       const created = await duplicatePreviewElement(streamerId, parsed.id);
       await writeAudit(streamerId, user.id, "preview.duplicated", { previewId: created.id });
@@ -193,7 +255,7 @@ async function handleModeratorConnection(
   });
 
   socket.on("preview:remove", async (payload) => {
-    await guarded(socket, user, "canEditPreview", async () => {
+    await guarded(socket, user, "canEditPreview", async (user) => {
       const parsed = idSchema.parse(payload);
       await removePreviewElement(streamerId, parsed.id);
       await writeAudit(streamerId, user.id, "preview.removed", { previewId: parsed.id });
@@ -202,7 +264,7 @@ async function handleModeratorConnection(
   });
 
   socket.on("live:show", async (payload) => {
-    await guarded(socket, user, "canPushLive", async () => {
+    await guarded(socket, user, "canPushLive", async (user) => {
       const parsed = liveShowSchema.parse(payload);
       const live = await showPreviewElementLive(streamerId, parsed.previewId);
       await writeAudit(streamerId, user.id, "live.show", {
@@ -217,14 +279,19 @@ async function handleModeratorConnection(
   socket.on("live:update", async (payload) => {
     await guarded(socket, user, "canPushLive", async () => {
       const parsed = liveUpdateSchema.parse(payload);
-      const live = await updateLiveFromPreview(streamerId, parsed.liveId, parsed.previewId, parsed.patch);
+      const live = await updateLiveFromPreview(
+        streamerId,
+        parsed.liveId,
+        parsed.previewId,
+        parsed.patch
+      );
       scheduleLiveRemoval(io, streamerId, live.id, live.endsAt ?? null);
       await emitLiveState(io, streamerId);
     });
   });
 
   socket.on("live:remove", async (payload) => {
-    await guarded(socket, user, "canRemoveLive", async () => {
+    await guarded(socket, user, "canRemoveLive", async (user) => {
       const parsed = idSchema.parse(payload);
       await removeLiveInstance(streamerId, parsed.id);
       clearTimer(parsed.id);
@@ -234,7 +301,7 @@ async function handleModeratorConnection(
   });
 
   socket.on("live:clear", async () => {
-    await guarded(socket, user, "canClearLive", async () => {
+    await guarded(socket, user, "canClearLive", async (user) => {
       await clearLiveState(streamerId);
       clearAllTimers();
       await writeAudit(streamerId, user.id, "live.cleared");
@@ -242,7 +309,12 @@ async function handleModeratorConnection(
     });
   });
 
-  for (const eventName of ["video:live:play", "video:live:pause", "video:live:stop", "video:live:restart"] as const) {
+  for (const eventName of [
+    "video:live:play",
+    "video:live:pause",
+    "video:live:stop",
+    "video:live:restart"
+  ] as const) {
     socket.on(eventName, async (payload) => {
       await guarded(socket, user, "canPushLive", async () => {
         const parsed = idSchema.parse(payload);
@@ -258,29 +330,34 @@ async function handleModeratorConnection(
       });
     });
   }
-
-  socket.on("disconnect", () => {
-    moderatorsByStreamer.get(streamerId)?.delete(socket.id);
-    emitPresence(io, streamerId);
-  });
 }
 
 async function guarded(
   socket: Socket,
   user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>,
   permission: PermissionFlag,
-  action: () => Promise<void>
-): Promise<void> {
+  action: (user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>) => Promise<void>
+): Promise<boolean> {
   try {
     const rateLimit = socketEventLimiter.consume(`socket:event:${socket.id}`);
     if (!rateLimit.allowed) {
       socket.emit("app:error", "Too many realtime actions. Slow down and try again.");
-      return;
+      return false;
     }
-    assertAllowed(user, permission);
-    await action();
+    const currentUser = await getUserFromCookieHeader(socket.handshake.headers.cookie);
+    if (!socket.connected || !currentUser || currentUser.id !== user.id) {
+      socket.emit("access:revoked");
+      socket.disconnect(true);
+      return false;
+    }
+    assertAllowed(currentUser, permission);
+    // The canvas is broadcast directly to OBS, including preview mutations.
+    if (permission === "canEditPreview") assertAllowed(currentUser, "canPushLive");
+    await action(currentUser);
+    return true;
   } catch (error) {
     socket.emit("app:error", error instanceof Error ? error.message : "Action failed");
+    return false;
   }
 }
 

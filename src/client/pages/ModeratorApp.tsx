@@ -1,4 +1,11 @@
-import { AlertTriangle, ClipboardList, LogOut, Monitor, RefreshCw, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ClipboardList,
+  LogOut,
+  Monitor,
+  RefreshCw,
+  ShieldCheck
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type {
@@ -15,8 +22,8 @@ import { CanvasStage } from "../components/CanvasStage";
 import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
 import { PropertiesPanel } from "../components/PropertiesPanel";
+import { reconcilePreview } from "../previewSync";
 
-type Category = "ALL" | "IMAGES" | "GIF" | "VIDEOS" | "AUDIO";
 type ZoomValue = "fit" | 0.25 | 0.5 | 0.75 | 1;
 
 interface MeResponse {
@@ -38,12 +45,12 @@ export function ModeratorApp() {
     overlayCount: 0,
     moderators: []
   });
-  const [category, setCategory] = useState<Category>("ALL");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState<ZoomValue>("fit");
   const [error, setError] = useState("");
   const socketRef = useRef<Socket | null>(null);
   const pendingPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
+  const inFlightPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const previewPatchTimers = useRef(new Map<string, number>());
 
   useEffect(() => {
@@ -78,7 +85,21 @@ export function ModeratorApp() {
     }
     const socket = io({ path: "/socket.io" });
     socketRef.current = socket;
-    socket.on("preview:state", (state: OverlayElement[]) => setPreview(state));
+    socket.on("access:revoked", () => {
+      window.location.href = "/login";
+    });
+    socket.on("preview:state", (state: OverlayElement[]) =>
+      setPreview(
+        reconcilePreview(state, inFlightPreviewPatches.current, pendingPreviewPatches.current)
+      )
+    );
+    socket.on("disconnect", () => {
+      for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
+      previewPatchTimers.current.clear();
+      pendingPreviewPatches.current.clear();
+      inFlightPreviewPatches.current.clear();
+      setError("Connection lost. Reconnecting; unconfirmed changes may not have been saved.");
+    });
     socket.on("presence:update", (state: PresenceState) => setPresence(state));
     socket.on("app:error", (message: string) => setError(message));
     return () => {
@@ -98,6 +119,7 @@ export function ModeratorApp() {
   }, []);
 
   const permissions: PermissionMap | null = user?.permissions ?? null;
+  const canEditCanvas = Boolean(permissions?.canEditPreview && permissions?.canPushLive);
   const selected = useMemo(
     () => preview.find((element) => element.id === selectedId) ?? null,
     [preview, selectedId]
@@ -162,11 +184,7 @@ export function ModeratorApp() {
     }
   }
 
-  async function addMediaUrl(payload: {
-    url: string;
-    type: Extract<MediaType, "VIDEO" | "AUDIO">;
-    name?: string;
-  }) {
+  async function addMediaUrl(payload: { url: string; type: MediaType; name?: string }) {
     setError("");
     try {
       const result = await api<{ media: MediaItem }>("/api/media/url", {
@@ -181,10 +199,22 @@ export function ModeratorApp() {
   }
 
   function emit(event: string, payload?: unknown) {
+    if (event.startsWith("preview:") && !canEditCanvas) {
+      setError("Canvas editing requires permission to edit and control the live overlay.");
+      return;
+    }
     socketRef.current?.emit(event, payload);
   }
 
   function patchPreviewLocal(id: string, patch: Partial<OverlayElement>) {
+    if (!canEditCanvas) {
+      setError("Canvas editing requires permission to edit and control the live overlay.");
+      return;
+    }
+    if (!socketRef.current?.connected) {
+      setError("No server connection. Wait for reconnection before editing.");
+      return;
+    }
     setPreview((items) =>
       items.map((item) => (item.id === id ? mergeElementPatch(item, patch) : item))
     );
@@ -194,15 +224,34 @@ export function ModeratorApp() {
   function schedulePreviewPatch(id: string, patch: Partial<OverlayElement>) {
     const existing = pendingPreviewPatches.current.get(id);
     pendingPreviewPatches.current.set(id, existing ? mergePatch(existing, patch) : patch);
+    schedulePreviewFlush(id);
+  }
+
+  function schedulePreviewFlush(id: string) {
     if (previewPatchTimers.current.has(id)) {
       return;
     }
     const timer = window.setTimeout(() => {
       previewPatchTimers.current.delete(id);
+      if (inFlightPreviewPatches.current.has(id)) return;
       const nextPatch = pendingPreviewPatches.current.get(id);
       pendingPreviewPatches.current.delete(id);
-      if (nextPatch) {
-        emit("preview:update", { id, patch: nextPatch });
+      const socket = socketRef.current;
+      if (nextPatch && socket?.connected) {
+        inFlightPreviewPatches.current.set(id, nextPatch);
+        socket
+          .timeout(10000)
+          .emit("preview:update", { id, patch: nextPatch }, (error: Error | null, ok: boolean) => {
+            if (inFlightPreviewPatches.current.get(id) !== nextPatch) return;
+            inFlightPreviewPatches.current.delete(id);
+            if (error || !ok) {
+              // Reload canonical state instead of silently keeping rejected optimistic edits.
+              socket.disconnect().connect();
+              setError("Could not save changes. Reloading canvas from the server.");
+              return;
+            }
+            if (pendingPreviewPatches.current.has(id)) schedulePreviewFlush(id);
+          });
       }
     }, 80);
     previewPatchTimers.current.set(id, timer);
@@ -283,8 +332,6 @@ export function ModeratorApp() {
       <div className="workspace">
         <MediaLibrary
           media={media}
-          category={category}
-          onCategoryChange={setCategory}
           onUpload={(files) => void uploadFiles(files)}
           onAdd={(mediaId) => emit("preview:add", { mediaId })}
           onAddUrl={(payload) => void addMediaUrl(payload)}
@@ -300,7 +347,7 @@ export function ModeratorApp() {
           selectedId={selectedId}
           zoom={zoom}
           onSelect={(id) => setSelectedId(id || null)}
-          onUpdate={patchPreviewLocal}
+          onUpdate={canEditCanvas ? patchPreviewLocal : undefined}
         />
 
         <PropertiesPanel
@@ -312,19 +359,25 @@ export function ModeratorApp() {
       </div>
 
       <footer className="bottom-panels single-panel">
-        <LayersPanel
-          title="Canvas Assets"
-          elements={preview}
-          selectedId={selectedId}
-          onSelect={(id) => setSelectedId(id)}
-          onToggle={(id, visible) => patchPreviewLocal(id, { visible })}
-        />
+        <details>
+          <summary>Объекты на полотне ({preview.length})</summary>
+          <LayersPanel
+            title="Canvas Assets"
+            elements={preview}
+            selectedId={selectedId}
+            onSelect={(id) => setSelectedId(id)}
+            onToggle={(id, visible) => patchPreviewLocal(id, { visible })}
+          />
+        </details>
       </footer>
     </main>
   );
 }
 
-function mergeElementPatch(element: OverlayElement, patch: Partial<OverlayElement>): OverlayElement {
+function mergeElementPatch(
+  element: OverlayElement,
+  patch: Partial<OverlayElement>
+): OverlayElement {
   return {
     ...element,
     ...patch,
@@ -339,6 +392,6 @@ function mergePatch(
   return {
     ...existing,
     ...patch,
-    props: patch.props ? patch.props : existing.props
+    ...(patch.props || existing.props ? { props: patch.props ?? existing.props } : {})
   };
 }

@@ -60,7 +60,11 @@ export function createRateLimitMiddleware(options: {
   };
 }
 
-export function applySecurityHeaders(request: Request, response: Response, next: NextFunction): void {
+export function applySecurityHeaders(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): void {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "same-origin");
   response.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -77,7 +81,11 @@ export function applySecurityHeaders(request: Request, response: Response, next:
   next();
 }
 
-export function requireTrustedOrigin(request: Request, response: Response, next: NextFunction): void {
+export function requireTrustedOrigin(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): void {
   if (!unsafeMethods.has(request.method)) {
     next();
     return;
@@ -124,8 +132,7 @@ export function isOriginAllowed(origin?: string): boolean {
 }
 
 export function clientIp(request: Request): string {
-  const forwarded = request.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.ip || request.socket.remoteAddress || "unknown";
+  return request.socket.remoteAddress || "unknown";
 }
 
 function buildContentSecurityPolicy(): string {
@@ -140,10 +147,11 @@ function buildContentSecurityPolicy(): string {
     "base-uri 'self'",
     "object-src 'none'",
     "frame-ancestors 'self'",
+    "frame-src 'self' https://www.youtube.com",
     "form-action 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    "img-src 'self' https: data: blob:",
     "media-src 'self' https: http: blob:",
     `connect-src ${Array.from(connectSources).join(" ")}`,
     "font-src 'self' data:"

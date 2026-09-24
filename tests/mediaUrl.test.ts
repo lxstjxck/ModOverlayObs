@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { buildYouTubeEmbedUrl, getYouTubeVideoId } from "../src/shared/mediaUrl";
+import { mediaUrlSchema } from "../src/shared/validation";
+
+describe("remote media validation", () => {
+  it.each(["IMAGE", "GIF", "VIDEO", "AUDIO"])("accepts HTTPS links for %s", (type) => {
+    expect(mediaUrlSchema.safeParse({ type, url: "https://example.com/media" }).success).toBe(true);
+  });
+  it.each(["file:///C:/private.png", "javascript:alert(1)", "data:image/png;base64,AAAA"])("rejects non-web URLs: %s", (url) => {
+    expect(mediaUrlSchema.safeParse({ type: "IMAGE", url }).success).toBe(false);
+  });
+});
 
 describe("media url helpers", () => {
   it("extracts YouTube ids from watch urls", () => {

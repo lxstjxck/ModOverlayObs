@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import type { OverlayElement } from "../../shared/types";
 import {
   isPlayableNode,
+  seekMediaNode,
+  observeYouTubeTime,
   pauseMediaNode,
   playMediaNode,
   restartMediaNode,
@@ -19,7 +21,12 @@ interface PropertiesPanelProps {
   onRemove: () => void;
 }
 
-export function PropertiesPanel({ selected, onUpdate, onDuplicate, onRemove }: PropertiesPanelProps) {
+export function PropertiesPanel({
+  selected,
+  onUpdate,
+  onDuplicate,
+  onRemove
+}: PropertiesPanelProps) {
   const [videoTime, setVideoTime] = useState({ current: 0, duration: 0 });
   const [mediaElement, setMediaElement] = useState<PlayableNode | null>(null);
 
@@ -36,7 +43,11 @@ export function PropertiesPanel({ selected, onUpdate, onDuplicate, onRemove }: P
   }, [selected?.id, selected?.type]);
 
   useEffect(() => {
-    if (!mediaElement || !(mediaElement instanceof HTMLMediaElement)) {
+    if (mediaElement instanceof HTMLIFrameElement) {
+      setVideoTime({ current: 0, duration: 0 });
+      return observeYouTubeTime(mediaElement, setVideoTime);
+    }
+    if (!mediaElement) {
       setVideoTime({ current: 0, duration: 0 });
       return undefined;
     }
@@ -77,7 +88,10 @@ export function PropertiesPanel({ selected, onUpdate, onDuplicate, onRemove }: P
         <>
           <label className="field">
             Text
-            <textarea value={selected.text ?? ""} onChange={(event) => update({ text: event.target.value })} />
+            <textarea
+              value={selected.text ?? ""}
+              onChange={(event) => update({ text: event.target.value })}
+            />
           </label>
           <TextStyleControls selected={selected} onUpdate={update} />
         </>
@@ -88,7 +102,11 @@ export function PropertiesPanel({ selected, onUpdate, onDuplicate, onRemove }: P
         <NumberField label="Y" value={selected.y} onChange={(y) => update({ y })} />
         <NumberField label="W" value={selected.width} onChange={(width) => update({ width })} />
         <NumberField label="H" value={selected.height} onChange={(height) => update({ height })} />
-        <NumberField label="Rot" value={selected.rotation} onChange={(rotation) => update({ rotation })} />
+        <NumberField
+          label="Rot"
+          value={selected.rotation}
+          onChange={(rotation) => update({ rotation })}
+        />
         <NumberField label="Z" value={selected.zIndex} onChange={(zIndex) => update({ zIndex })} />
       </div>
 
@@ -105,7 +123,12 @@ export function PropertiesPanel({ selected, onUpdate, onDuplicate, onRemove }: P
       </label>
 
       {isPlayableMedia(selected) && (
-        <MediaControls selected={selected} mediaElement={mediaElement} videoTime={videoTime} update={update} />
+        <MediaControls
+          selected={selected}
+          mediaElement={mediaElement}
+          videoTime={videoTime}
+          update={update}
+        />
       )}
 
       <div className="action-stack">
@@ -132,7 +155,8 @@ function TextStyleControls({
   onUpdate: (patch: Partial<OverlayElement>) => void;
 }) {
   const props = selected.props;
-  const updateProp = (key: string, value: unknown) => onUpdate({ props: { ...props, [key]: value } });
+  const updateProp = (key: string, value: unknown) =>
+    onUpdate({ props: { ...props, [key]: value } });
   return (
     <>
       <div className="grid-fields">
@@ -180,6 +204,18 @@ function MediaControls({
   videoTime: { current: number; duration: number };
   update: (patch: Partial<OverlayElement>) => void;
 }) {
+  const [seekSeconds, setSeekSeconds] = useState(0);
+  function seek(seconds: number) {
+    seekMediaNode(mediaElement, seconds);
+    update({
+      props: {
+        ...selected.props,
+        playbackCommand: "seek",
+        seekSeconds: seconds,
+        playbackCommandId: crypto.randomUUID()
+      }
+    });
+  }
   function runCommand(command: "play" | "pause" | "stop" | "restart") {
     if (command === "play") {
       playMediaNode(mediaElement);
@@ -208,22 +244,14 @@ function MediaControls({
         <button type="button" title="Pause" onClick={() => runCommand("pause")}>
           <Pause size={15} />
         </button>
-        <button
-          type="button"
-          title="Stop"
-          onClick={() => runCommand("stop")}
-        >
+        <button type="button" title="Stop" onClick={() => runCommand("stop")}>
           <Square size={15} />
         </button>
-        <button
-          type="button"
-          title="Restart"
-          onClick={() => runCommand("restart")}
-        >
+        <button type="button" title="Restart" onClick={() => runCommand("restart")}>
           <RotateCcw size={15} />
         </button>
       </div>
-      {mediaElement instanceof HTMLMediaElement && (
+      {mediaElement && (
         <div className="timeline-row">
           <span>{formatClock(videoTime.current)}</span>
           <input
@@ -233,12 +261,29 @@ function MediaControls({
             step={0.05}
             value={Math.min(videoTime.current, videoTime.duration || 1)}
             onChange={(event) => {
-              mediaElement.currentTime = Number(event.target.value);
+              seek(Number(event.target.value));
             }}
           />
           <span>{formatClock(videoTime.duration)}</span>
         </div>
       )}
+      <div className="timeline-row">
+        <label className="field">
+          Позиция, секунды
+          <input
+            type="number"
+            min={0}
+            max={86400}
+            value={seekSeconds}
+            onChange={(event) =>
+              setSeekSeconds(Math.max(0, Math.min(86400, Number(event.target.value))))
+            }
+          />
+        </label>
+        <button type="button" onClick={() => seek(seekSeconds)}>
+          Перейти
+        </button>
+      </div>
       <label className="field">
         Local Volume
         <input

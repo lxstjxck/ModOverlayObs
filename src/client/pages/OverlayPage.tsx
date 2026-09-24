@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type { OverlayElement, StreamerView } from "../../shared/types";
 import { CanvasStage } from "../components/CanvasStage";
+import { overlayMediaUrl } from "../overlayMediaUrl";
 import {
   isPlayableNode,
+  seekMediaNode,
   pauseMediaNode,
   playMediaNode,
   restartMediaNode,
@@ -40,6 +42,13 @@ export function OverlayPage({ token }: { token: string }) {
       query: { overlayToken: token }
     });
     socketRef.current = socket;
+    const clearCanvas = () => {
+      setCanvas([]);
+      appliedCommandKeys.current.clear();
+    };
+    socket.on("access:revoked", clearCanvas);
+    socket.on("disconnect", clearCanvas);
+    socket.on("connect_error", clearCanvas);
     socket.on("overlay:state", (state: OverlayElement[]) => setCanvas(state));
     socket.on("overlay:add", (element: OverlayElement) =>
       setCanvas((items) => [...items.filter((item) => item.id !== element.id), element])
@@ -62,8 +71,11 @@ export function OverlayPage({ token }: { token: string }) {
   }, [token]);
 
   const onAirElements = useMemo(
-    () => canvas.filter((element) => isElementInViewport(element, defaultStreamer)),
-    [canvas]
+    () =>
+      canvas
+        .filter((element) => isElementInViewport(element, defaultStreamer))
+        .map((element) => ({ ...element, src: overlayMediaUrl(element.src, token) })),
+    [canvas, token]
   );
 
   useEffect(() => {
@@ -82,12 +94,7 @@ export function OverlayPage({ token }: { token: string }) {
 
   return (
     <main className="overlay-page">
-      <CanvasStage
-        mode="overlay"
-        streamer={defaultStreamer}
-        elements={onAirElements}
-        zoom="fit"
-      />
+      <CanvasStage mode="overlay" streamer={defaultStreamer} elements={onAirElements} zoom="fit" />
     </main>
   );
 }
@@ -105,7 +112,11 @@ function applyPlaybackCommand(
   const command = element.props.playbackCommand;
   const commandId = element.props.playbackCommandId;
   if (
-    (command !== "play" && command !== "pause" && command !== "stop" && command !== "restart") ||
+    (command !== "play" &&
+      command !== "pause" &&
+      command !== "stop" &&
+      command !== "restart" &&
+      command !== "seek") ||
     (typeof commandId !== "string" && typeof commandId !== "number")
   ) {
     return;
@@ -115,7 +126,10 @@ function applyPlaybackCommand(
     return;
   }
   applied.set(element.id, key);
-  if (command === "play") {
+  if (command === "seek") {
+    const seconds = element.props.seekSeconds;
+    if (typeof seconds === "number") seekMediaNode(media, seconds);
+  } else if (command === "play") {
     playMediaNode(media);
   } else if (command === "pause") {
     pauseMediaNode(media);

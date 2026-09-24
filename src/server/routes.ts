@@ -8,6 +8,7 @@ import {
   createSession,
   destroySession,
   getCsrfTokenFromRequest,
+  getUserFromRequest,
   requireAuth,
   requirePermission,
   toUserView,
@@ -15,20 +16,16 @@ import {
 } from "./auth";
 import { config } from "./config";
 import { prisma } from "./db";
+import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
-import {
-  clearLiveState,
-  getDefaultStreamer,
-  listMedia,
-  toMediaItem,
-  toStreamerView,
-  writeAudit
-} from "./state";
+import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
 import {
   deleteStoredUpload,
   uploadErrorHandler,
   uploadMiddleware,
-  validateAndStoreUpload
+  validateAndStoreUpload,
+  withUploadCommit,
+  type ValidatedUpload
 } from "./uploads";
 
 const loginIpRateLimit = createRateLimitMiddleware({
@@ -45,7 +42,7 @@ const loginAccountRateLimit = createRateLimitMiddleware({
   key: (request) => {
     const body = request.body as { username?: unknown };
     const username = typeof body.username === "string" ? body.username.toLowerCase() : "unknown";
-    return `login:account:${clientIp(request)}:${username}`;
+    return `login:account:${username}`;
   }
 });
 
@@ -111,7 +108,14 @@ export function createAppRouter(): express.Router {
     }
 
     const user = (request as AuthenticatedRequest).user;
-    const permission = parsed.data.type === "AUDIO" ? "canUploadAudio" : "canUploadVideo";
+    const permission = (
+      {
+        IMAGE: "canUploadImage",
+        GIF: "canUploadGif",
+        VIDEO: "canUploadVideo",
+        AUDIO: "canUploadAudio"
+      } as const
+    )[parsed.data.type];
     if (!toUserView(user).permissions[permission]) {
       response.status(403).json({ error: "Permission denied" });
       return;
@@ -119,7 +123,9 @@ export function createAppRouter(): express.Router {
 
     const streamer = await getDefaultStreamer();
     const mediaUrl = new URL(parsed.data.url);
-    const fallbackName = decodeURIComponent(mediaUrl.pathname.split("/").filter(Boolean).pop() ?? "");
+    const fallbackName = decodeURIComponent(
+      mediaUrl.pathname.split("/").filter(Boolean).pop() ?? ""
+    );
     const originalName =
       parsed.data.name?.trim() ||
       fallbackName ||
@@ -129,7 +135,12 @@ export function createAppRouter(): express.Router {
         streamerId: streamer.id,
         filename: `remote-${crypto.randomUUID()}`,
         originalName,
-        mimeType: parsed.data.type === "AUDIO" ? "audio/remote" : "video/remote",
+        mimeType:
+          parsed.data.type === "IMAGE" || parsed.data.type === "GIF"
+            ? "image/remote"
+            : parsed.data.type === "AUDIO"
+              ? "audio/remote"
+              : "video/remote",
         type: parsed.data.type,
         size: 0,
         url: parsed.data.url,
@@ -159,8 +170,10 @@ export function createAppRouter(): express.Router {
         return;
       }
 
+      let upload: ValidatedUpload | undefined;
+      let committed = false;
       try {
-        const upload = await validateAndStoreUpload(file);
+        upload = await validateAndStoreUpload(file);
         const permission =
           upload.type === "VIDEO"
             ? "canUploadVideo"
@@ -171,44 +184,64 @@ export function createAppRouter(): express.Router {
                 : "canUploadImage";
 
         if (!toUserView(user).permissions[permission]) {
-          await deleteStoredUpload(upload.filename);
           response.status(403).json({ error: "Permission denied" });
           return;
         }
 
         const streamer = await getDefaultStreamer();
-        const currentUsage = await prisma.media.aggregate({
-          where: { streamerId: streamer.id },
-          _sum: { size: true }
-        });
-        const totalSize = (currentUsage._sum.size ?? 0) + upload.size;
-        if (totalSize > config.maxTotalUploadSize) {
-          await deleteStoredUpload(upload.filename);
-          response.status(413).json({ error: "Upload storage quota exceeded" });
-          return;
-        }
+        const stored = upload;
+        const media = await withUploadCommit(() =>
+          prisma.$transaction(
+            async (tx) => {
+              const currentUsage = await tx.media.aggregate({
+                where: { streamerId: streamer.id },
+                _sum: { size: true }
+              });
+              const totalSize = (currentUsage._sum.size ?? 0) + stored.size;
+              if (totalSize > config.maxTotalUploadSize) {
+                throw new UploadQuotaError();
+              }
 
-        const media = await prisma.media.create({
-          data: {
-            streamerId: streamer.id,
-            filename: upload.filename,
-            originalName: upload.originalName,
-            mimeType: upload.mimeType,
-            type: upload.type,
-            size: upload.size,
-            url: upload.url,
-            uploadedById: user.id
-          },
-          include: { uploadedBy: true }
-        });
-        await writeAudit(streamer.id, user.id, "media.uploaded", {
-          originalName: upload.originalName,
-          type: upload.type,
-          size: upload.size
-        });
+              const created = await tx.media.create({
+                data: {
+                  streamerId: streamer.id,
+                  filename: stored.filename,
+                  originalName: stored.originalName,
+                  mimeType: stored.mimeType,
+                  type: stored.type,
+                  size: stored.size,
+                  url: stored.url,
+                  uploadedById: user.id
+                },
+                include: { uploadedBy: true }
+              });
+              await tx.auditLog.create({
+                data: {
+                  streamerId: streamer.id,
+                  userId: user.id,
+                  action: "media.uploaded",
+                  metadataJson: JSON.stringify({
+                    originalName: stored.originalName,
+                    type: stored.type,
+                    size: stored.size
+                  })
+                }
+              });
+              return created;
+            },
+            { isolationLevel: "Serializable" }
+          )
+        );
+        committed = true;
         response.status(201).json({ media: toMediaItem(media) });
       } catch (error) {
-        response.status(400).json({ error: uploadErrorHandler(error, request) });
+        response
+          .status(error instanceof UploadQuotaError ? 413 : 400)
+          .json({ error: uploadErrorHandler(error, request) });
+      } finally {
+        // Both validation failures and DB/audit rollbacks must release disk space.
+        await deleteStoredUpload(path.join(".tmp", file.filename));
+        if (upload && !committed) await deleteStoredUpload(upload.filename);
       }
     }
   );
@@ -219,7 +252,9 @@ export function createAppRouter(): express.Router {
       response.status(400).json({ error: "Invalid media id" });
       return;
     }
-    const body = z.object({ originalName: z.string().trim().min(1).max(180) }).safeParse(request.body);
+    const body = z
+      .object({ originalName: z.string().trim().min(1).max(180) })
+      .safeParse(request.body);
     if (!body.success) {
       response.status(400).json({ error: "Invalid media name" });
       return;
@@ -270,37 +305,79 @@ export function createAppRouter(): express.Router {
     });
   });
 
-  router.post("/obs/regenerate", requireAuth, requirePermission("canClearLive"), async (request, response) => {
-    const streamer = await getDefaultStreamer();
-    await clearLiveState(streamer.id);
-    const updated = await prisma.streamer.update({
-      where: { id: streamer.id },
-      data: { overlayToken: crypto.randomBytes(32).toString("hex") }
-    });
-    await writeAudit(updated.id, (request as AuthenticatedRequest).user.id, "overlay.token.regenerated");
-    response.json({
-      overlayUrl: buildOverlayUrl(request, updated.overlayToken),
-      canvasWidth: updated.canvasWidth,
-      canvasHeight: updated.canvasHeight
-    });
-  });
+  router.post(
+    "/obs/regenerate",
+    requireAuth,
+    requirePermission("canClearLive"),
+    async (request, response) => {
+      const streamer = await getDefaultStreamer();
+      const { updated, previousToken } = await prisma.$transaction(
+        async (tx) => {
+          const current = await tx.streamer.findUniqueOrThrow({ where: { id: streamer.id } });
+          await tx.liveInstance.deleteMany({ where: { streamerId: streamer.id } });
+          const updated = await tx.streamer.update({
+            where: { id: streamer.id },
+            data: { overlayToken: crypto.randomBytes(32).toString("hex") }
+          });
+          return { updated, previousToken: current.overlayToken };
+        },
+        { isolationLevel: "Serializable" }
+      );
+      accessRevocation.emit("overlay", previousToken);
+      await writeAudit(
+        updated.id,
+        (request as AuthenticatedRequest).user.id,
+        "overlay.token.regenerated"
+      );
+      response.json({
+        overlayUrl: buildOverlayUrl(request, updated.overlayToken),
+        canvasWidth: updated.canvasWidth,
+        canvasHeight: updated.canvasHeight
+      });
+    }
+  );
 
   return router;
+}
+
+class UploadQuotaError extends Error {
+  constructor() {
+    super("Upload storage quota exceeded");
+  }
 }
 
 export function configureUploads(app: express.Express): void {
   app.use(
     "/uploads",
+    async (request, response, next) => {
+      response.setHeader("Cache-Control", "private, no-store");
+      const token = request.query.overlayToken;
+      const user = await getUserFromRequest(request);
+      const streamer =
+        typeof token === "string"
+          ? await prisma.streamer.findUnique({ where: { overlayToken: token } })
+          : null;
+      if (!user && !streamer) {
+        response.status(401).end();
+        return;
+      }
+      const filename = decodeURIComponent(request.path.slice(1));
+      const media = await prisma.media.findUnique({ where: { filename } });
+      if (!media || (streamer && !user && media.streamerId !== streamer.id)) {
+        response.status(404).end();
+        return;
+      }
+      next();
+    },
     express.static(config.uploadDir, {
       dotfiles: "deny",
       index: false,
       fallthrough: false,
-      immutable: true,
-      maxAge: "7d",
+      maxAge: 0,
       setHeaders(response) {
         response.setHeader("X-Content-Type-Options", "nosniff");
         response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-        response.setHeader("Cache-Control", "public, max-age=604800, immutable");
+        response.setHeader("Cache-Control", "private, no-store");
       }
     })
   );
@@ -309,7 +386,7 @@ export function configureUploads(app: express.Express): void {
 export function configureStatic(app: express.Express): void {
   const clientDist = path.join(config.projectRoot, "dist", "client");
   app.use(express.static(clientDist));
-  app.get("*", (_request, response, next) => {
+  app.get("/{*path}", (_request, response, next) => {
     response.sendFile(path.join(clientDist, "index.html"), (error) => {
       if (error) {
         next();
@@ -319,7 +396,8 @@ export function configureStatic(app: express.Express): void {
 }
 
 function buildOverlayUrl(request: express.Request, token: string): string {
-  const origin = config.publicOrigin || config.domain || `${request.protocol}://${request.get("host")}`;
+  const origin =
+    config.publicOrigin || config.domain || `${request.protocol}://${request.get("host")}`;
   return `${origin.replace(/\/$/, "")}/overlay/${token}`;
 }
 
