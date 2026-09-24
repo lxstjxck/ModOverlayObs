@@ -18,6 +18,7 @@ import type {
   UserView
 } from "../../shared/types";
 import { api, ApiError } from "../api";
+import { appVersion } from "../appVersion";
 import { CanvasStage } from "../components/CanvasStage";
 import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
@@ -285,6 +286,7 @@ export function ModeratorApp() {
         <div className="topbar-brand">
           <ShieldCheck size={20} />
           <strong>Moderator Overlay</strong>
+          <span className="app-version">v{appVersion}</span>
         </div>
         <div className={`presence ${presence.overlayConnected ? "online" : "offline"}`}>
           <Monitor size={16} />

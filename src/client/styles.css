@@ -159,6 +159,12 @@ input[type="color"] {
   font-size: 26px;
 }
 
+.app-version {
+  margin: -14px 0 18px;
+  color: #8f9aa8;
+  font-size: 12px;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -216,6 +222,11 @@ input[type="color"] {
   border-radius: 6px;
   background: #11151a;
   white-space: nowrap;
+}
+
+.topbar-brand .app-version {
+  margin: 0 0 0 2px;
+  color: #8f9aa8;
 }
 
 .topbar-brand {

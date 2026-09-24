@@ -1,6 +1,7 @@
 import { LogIn } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { api } from "../api";
+import { appVersion } from "../appVersion";
 
 export function LoginPage() {
   const [username, setUsername] = useState("owner");
@@ -30,6 +31,7 @@ export function LoginPage() {
       <form className="login-form" onSubmit={handleSubmit}>
         <div className="brand-mark">MO</div>
         <h1>Moderator Overlay</h1>
+        <p className="app-version">Version {appVersion}</p>
         <label className="field">
           Username
           <input value={username} onChange={(event) => setUsername(event.target.value)} autoFocus />
