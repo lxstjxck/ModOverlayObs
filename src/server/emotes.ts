@@ -87,13 +87,44 @@ function twitchUrl(
   template: string,
   id: string,
   format: "static" | "animated",
+  theme: "dark" | "light",
   scale: string
-): string {
-  return template
-    .replaceAll("{id}", encodeURIComponent(id))
-    .replaceAll("{format}", format)
-    .replaceAll("{theme_mode}", "dark")
-    .replaceAll("{scale}", scale);
+): string | null {
+  if (!["id", "format", "theme_mode", "scale"].every((field) => template.includes(`{{${field}}}`)))
+    return null;
+  const value = template
+    .replaceAll("{{id}}", encodeURIComponent(id))
+    .replaceAll("{{format}}", format)
+    .replaceAll("{{theme_mode}}", theme)
+    .replaceAll("{{scale}}", scale);
+  return validTwitchUrl(value) ? value : null;
+}
+
+function validTwitchUrl(value: string): boolean {
+  if (/[{}]|%7b|%7d/i.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "static-cdn.jtvnw.net";
+  } catch {
+    return false;
+  }
+}
+
+function twitchScales(value: unknown): string[] {
+  return items(value)
+    .filter(
+      (scale): scale is string =>
+        typeof scale === "string" && /^\d+(?:\.\d+)?$/.test(scale) && Number(scale) > 0
+    )
+    .sort((left, right) => Number(left) - Number(right));
+}
+
+function twitchStaticImage(row: Record<string, unknown>, scale: string): string | null {
+  const key = ({ "1.0": "url_1x", "2.0": "url_2x", "3.0": "url_4x" } as Record<string, string>)[
+    scale
+  ];
+  const url = key ? string(record(row.images)[key]) : "";
+  return validTwitchUrl(url) ? url : null;
 }
 
 export function normalizeTwitch(data: unknown): ChannelEmote[] {
@@ -105,17 +136,39 @@ export function normalizeTwitch(data: unknown): ChannelEmote[] {
     const row = record(value);
     const id = string(row.id);
     const name = string(row.name);
-    if (!id || !name) return [];
-    const animated = items(row.format).includes("animated");
-    const format = animated ? "animated" : "static";
+    if (!/^[a-zA-Z0-9_-]+$/.test(id) || !name) return [];
+    const formats = items(row.format);
+    const themes = items(row.theme_mode);
+    const scales = twitchScales(row.scale);
+    const theme = themes.includes("dark") ? "dark" : themes.includes("light") ? "light" : null;
+    if (!theme || !scales.length) return [];
+    const previewScale = scales[0];
+    const sourceScale = scales[scales.length - 1];
+    let animated = false;
+    let previewUrl: string | null = null;
+    let sourceUrl: string | null = null;
+    if (formats.includes("animated")) {
+      previewUrl = twitchUrl(template, id, "animated", theme, previewScale);
+      sourceUrl = twitchUrl(template, id, "animated", theme, sourceScale);
+      animated = Boolean(previewUrl && sourceUrl);
+    }
+    if (!animated && formats.includes("static")) {
+      previewUrl =
+        twitchUrl(template, id, "static", theme, previewScale) ??
+        twitchStaticImage(row, previewScale);
+      sourceUrl =
+        twitchUrl(template, id, "static", theme, sourceScale) ??
+        twitchStaticImage(row, sourceScale);
+    }
+    if (!previewUrl || !sourceUrl) return [];
     return [
       {
         id,
         provider: "twitch" as const,
         name,
         animated,
-        previewUrl: twitchUrl(template, id, format, "1.0"),
-        sourceUrl: twitchUrl(template, id, format, "3.0")
+        previewUrl,
+        sourceUrl
       }
     ];
   });

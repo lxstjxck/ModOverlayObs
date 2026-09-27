@@ -292,8 +292,16 @@ describe("realtime access revocation", () => {
         return new Response(
           JSON.stringify({
             template:
-              "https://static-cdn.jtvnw.net/emoticons/v2/{id}/{format}/{theme_mode}/{scale}",
-            data: [{ id: "1", name: "Wave", format: ["animated"] }]
+              "https://static-cdn.jtvnw.net/emoticons/v2/{{id}}/{{format}}/{{theme_mode}}/{{scale}}",
+            data: [
+              {
+                id: "1",
+                name: "Wave",
+                format: ["animated"],
+                scale: ["1.0", "3.0"],
+                theme_mode: ["dark"]
+              }
+            ]
           }),
           { status: 200 }
         );
