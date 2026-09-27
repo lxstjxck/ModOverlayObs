@@ -11,6 +11,7 @@ import { io, type Socket } from "socket.io-client";
 import type {
   MediaItem,
   MediaType,
+  ChannelEmote,
   ElementTransform,
   OverlayElement,
   PermissionMap,
@@ -23,6 +24,7 @@ import { appVersion } from "../appVersion";
 import { CanvasStage } from "../components/CanvasStage";
 import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
+import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { reconcilePreview } from "../previewSync";
 
@@ -41,6 +43,7 @@ export function ModeratorApp() {
   const [user, setUser] = useState<UserView | null>(null);
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
   const [preview, setPreview] = useState<OverlayElement[]>([]);
   const [presence, setPresence] = useState<PresenceState>({
     overlayConnected: false,
@@ -385,7 +388,7 @@ export function ModeratorApp() {
         <div className="topbar-brand">
           <ShieldCheck size={20} />
           <strong>Moderator Overlay</strong>
-          <span className="app-version">v{appVersion}</span>
+          <span className="app-version">Version {appVersion}</span>
         </div>
         <div className={`presence ${presence.overlayConnected ? "online" : "offline"}`}>
           <Monitor size={16} />
@@ -431,15 +434,46 @@ export function ModeratorApp() {
       )}
 
       <div className="workspace">
-        <MediaLibrary
-          media={media}
-          onUpload={(files) => void uploadFiles(files)}
-          onAdd={(mediaId) => emit("preview:add", { mediaId })}
-          onAddUrl={(payload) => void addMediaUrl(payload)}
-          onDelete={(mediaId) => void deleteMedia(mediaId)}
-          onAddText={() => emit("preview:add", { type: "TEXT", text: "New text" })}
-          canDelete={permissions?.canDeleteMedia ?? false}
-        />
+        <div className="asset-sidebar">
+          <div className="asset-tabs">
+            <button
+              type="button"
+              className={assetTab === "media" ? "active" : ""}
+              onClick={() => setAssetTab("media")}
+            >
+              MEDIA
+            </button>
+            <button
+              type="button"
+              className={assetTab === "emotes" ? "active" : ""}
+              onClick={() => setAssetTab("emotes")}
+            >
+              EMOTES
+            </button>
+          </div>
+          {assetTab === "media" ? (
+            <MediaLibrary
+              media={media}
+              onUpload={(files) => void uploadFiles(files)}
+              onAdd={(mediaId) => emit("preview:add", { mediaId })}
+              onAddUrl={(payload) => void addMediaUrl(payload)}
+              onDelete={(mediaId) => void deleteMedia(mediaId)}
+              onAddText={() => emit("preview:add", { type: "TEXT", text: "New text" })}
+              canDelete={permissions?.canDeleteMedia ?? false}
+            />
+          ) : (
+            <EmotesPanel
+              streamer={streamer}
+              onStreamerChange={setStreamer}
+              onAdd={(emote: ChannelEmote) =>
+                emit("preview:add", { emoteId: emote.id, emoteProvider: emote.provider })
+              }
+              canConfigure={permissions?.canEditPreview ?? false}
+              canCreate={permissions?.canUploadImage ?? false}
+              canDelete={permissions?.canDeleteMedia ?? false}
+            />
+          )}
+        </div>
 
         <CanvasStage
           mode="workspace"

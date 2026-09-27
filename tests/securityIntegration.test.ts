@@ -59,6 +59,7 @@ import { createAppRouter, configureUploads } from "../src/server/routes";
 import { configureSocket } from "../src/server/socket";
 import { requireCsrf, requireTrustedOrigin } from "../src/server/security";
 import { accessRevocation } from "../src/server/accessRevocation";
+import { getChannelEmotes } from "../src/server/emotes";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -225,6 +226,147 @@ afterAll(async () => {
 });
 
 describe("realtime access revocation", () => {
+  it("isolates Twitch and 7TV failures while keeping custom emotes", async () => {
+    const streamer = await prisma.streamer.update({
+      where: { id: streamerId },
+      data: { twitchLogin: "example", twitchBroadcasterId: "12345" }
+    });
+    await prisma.customEmote.create({
+      data: {
+        streamerId,
+        provider: "custom",
+        name: "Saved",
+        sourceUrl: "https://example.com/saved.png",
+        previewUrl: "https://example.com/saved.png"
+      }
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).startsWith("https://7tv.io/"))
+        return new Response(
+          JSON.stringify({
+            emote_set: {
+              emotes: [
+                {
+                  id: "a",
+                  name: "Alias",
+                  data: {
+                    animated: true,
+                    host: {
+                      url: "//cdn.7tv.app/emote/01ABCDEF0123456789ABCDEF01",
+                      files: [
+                        { name: "1x.webp", width: 32, height: 32 },
+                        { name: "4x.webp", width: 128, height: 128 }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      return new Response("Unavailable", { status: 503 });
+    });
+    const result = await getChannelEmotes(streamer);
+    expect(result.twitch).toEqual([]);
+    expect(result.errors.twitch).toBeTruthy();
+    expect(result.sevenTv).toMatchObject([{ name: "Alias", animated: true }]);
+    expect(result.custom).toMatchObject([{ name: "Saved" }]);
+    fetchMock.mockRestore();
+  });
+
+  it("keeps Twitch emotes when 7TV is unavailable", async () => {
+    const streamer = await prisma.streamer.update({
+      where: { id: streamerId },
+      data: { twitchLogin: "example", twitchBroadcasterId: "67890" }
+    });
+    config.twitchClientId = "test-client";
+    config.twitchClientSecret = "test-secret";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("oauth2/token"))
+        return new Response(JSON.stringify({ access_token: "test-token", expires_in: 3600 }), {
+          status: 200
+        });
+      if (url.includes("/helix/chat/emotes?"))
+        return new Response(
+          JSON.stringify({
+            template:
+              "https://static-cdn.jtvnw.net/emoticons/v2/{id}/{format}/{theme_mode}/{scale}",
+            data: [{ id: "1", name: "Wave", format: ["animated"] }]
+          }),
+          { status: 200 }
+        );
+      return new Response("Unavailable", { status: 503 });
+    });
+    const result = await getChannelEmotes(streamer);
+    expect(result.twitch).toMatchObject([{ name: "Wave", animated: true }]);
+    expect(result.sevenTv).toEqual([]);
+    expect(result.errors.sevenTv).toBeTruthy();
+    config.twitchClientId = "";
+    config.twitchClientSecret = "";
+  });
+  it("stores custom emotes per streamer and adds them only to SPAWN without using uploads", async () => {
+    for (const url of [
+      "javascript:alert(1)",
+      "data:image/png;base64,AA==",
+      "file:///tmp/emote.png",
+      "http://example.com/emote.png"
+    ]) {
+      const invalid = await fetch(`${baseUrl}/api/emotes/custom`, {
+        method: "POST",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      expect(invalid.status).toBe(400);
+    }
+    await prisma.user.update({
+      where: { id: moderatorId },
+      data: { permissionsJson: JSON.stringify({ canUploadImage: false }) }
+    });
+    const forbidden = await fetch(`${baseUrl}/api/emotes/custom`, {
+      method: "POST",
+      headers: { ...headers("mod-session"), "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/emote.gif" })
+    });
+    expect(forbidden.status).toBe(403);
+    const created = await fetch(`${baseUrl}/api/emotes/custom`, {
+      method: "POST",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com/emote.gif", name: "Wave" })
+    });
+    expect(created.status).toBe(201);
+    const { emote } = (await created.json()) as { emote: { id: string } };
+    expect(await files()).toEqual([]);
+    expect(
+      (await prisma.media.aggregate({ where: { streamerId }, _sum: { size: true } }))._sum.size
+    ).toBeNull();
+    const second = await prisma.streamer.create({
+      data: { displayName: "Second", overlayToken: "second-overlay" }
+    });
+    expect(await prisma.customEmote.count({ where: { streamerId: second.id } })).toBe(0);
+
+    const socket = await socketClient({ session: "owner-session" });
+    const state = event<
+      Array<{ id: string; x: number; width: number; height: number; src: string }>
+    >(socket, "preview:state");
+    socket.emit("preview:add", { emoteProvider: "custom", emoteId: emote.id });
+    const added = (await state)[0];
+    expect(added).toMatchObject({
+      x: -256,
+      width: 200,
+      height: 200,
+      src: "https://example.com/emote.gif"
+    });
+    expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
+    const removed = await fetch(`${baseUrl}/api/emotes/custom/${emote.id}`, {
+      method: "DELETE",
+      headers: headers()
+    });
+    expect(removed.status).toBe(200);
+    expect(await prisma.customEmote.count({ where: { streamerId } })).toBe(0);
+    expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(1);
+  });
   it("relays transient geometry without a write and restores committed geometry on reconnect", async () => {
     const element = await prisma.previewElement.create({
       data: { streamerId, type: "TEXT", name: "drag", text: "drag" }

@@ -1,10 +1,4 @@
-import type {
-  LiveInstance,
-  Media,
-  PreviewElement,
-  Streamer,
-  User
-} from "@prisma/client";
+import type { LiveInstance, Media, PreviewElement, Streamer, User } from "@prisma/client";
 import crypto from "node:crypto";
 import type { MediaItem, OverlayElement, StreamerView } from "../shared/types";
 import { prisma } from "./db";
@@ -34,6 +28,8 @@ export function toStreamerView(streamer: Streamer, includeToken = false): Stream
     displayName: streamer.displayName,
     canvasWidth: streamer.canvasWidth,
     canvasHeight: streamer.canvasHeight,
+    twitchLogin: streamer.twitchLogin,
+    twitchBroadcasterId: streamer.twitchBroadcasterId,
     overlayToken: includeToken ? streamer.overlayToken : undefined
   };
 }
@@ -140,16 +136,46 @@ export async function listMedia(streamerId: string): Promise<MediaItem[]> {
 
 export async function createPreviewElement(
   streamerId: string,
-  payload: { mediaId?: string; type?: "TEXT"; text?: string; x?: number; y?: number }
+  payload: {
+    mediaId?: string;
+    type?: "TEXT";
+    text?: string;
+    x?: number;
+    y?: number;
+    emote?: { name: string; sourceUrl: string; width?: number; height?: number };
+  }
 ): Promise<OverlayElement> {
   const zIndex = await nextPreviewZIndex(streamerId);
+  if (payload.emote) {
+    const { name, sourceUrl, width: nativeWidth, height: nativeHeight } = payload.emote;
+    const ratio = nativeWidth && nativeHeight ? nativeWidth / nativeHeight : 1;
+    const width = Math.round(ratio >= 1 ? 200 : 200 * ratio);
+    const height = Math.round(ratio >= 1 ? 200 / ratio : 200);
+    const created = await prisma.previewElement.create({
+      data: {
+        streamerId,
+        type: "IMAGE",
+        name,
+        src: sourceUrl,
+        x: payload.x ?? -width - 56,
+        y: payload.y ?? 120,
+        width,
+        height,
+        zIndex,
+        durationMs: 8_000
+      }
+    });
+    return previewToElement(created);
+  }
   if (payload.mediaId) {
     const media = await prisma.media.findFirstOrThrow({
       where: { id: payload.mediaId, streamerId }
     });
     const isPortrait = media.width && media.height ? media.height > media.width : false;
-    const width = media.type === "AUDIO" ? 520 : media.type === "VIDEO" ? 480 : isPortrait ? 260 : 360;
-    const height = media.type === "AUDIO" ? 120 : media.type === "VIDEO" ? 270 : isPortrait ? 360 : 240;
+    const width =
+      media.type === "AUDIO" ? 520 : media.type === "VIDEO" ? 480 : isPortrait ? 260 : 360;
+    const height =
+      media.type === "AUDIO" ? 120 : media.type === "VIDEO" ? 270 : isPortrait ? 360 : 240;
     const x = payload.x ?? -width - 56;
     const y = payload.y ?? 120;
     const created = await prisma.previewElement.create({
@@ -218,7 +244,10 @@ export async function updatePreviewElement(
   return previewToElement(updated);
 }
 
-export async function duplicatePreviewElement(streamerId: string, id: string): Promise<OverlayElement> {
+export async function duplicatePreviewElement(
+  streamerId: string,
+  id: string
+): Promise<OverlayElement> {
   const source = await prisma.previewElement.findFirstOrThrow({ where: { id, streamerId } });
   const zIndex = await nextPreviewZIndex(streamerId);
   const created = await prisma.previewElement.create({

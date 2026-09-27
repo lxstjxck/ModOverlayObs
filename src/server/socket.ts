@@ -17,6 +17,7 @@ import {
 } from "./auth";
 import { accessRevocation } from "./accessRevocation";
 import { prisma } from "./db";
+import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
 import { isOriginAllowed, WindowRateLimiter } from "./security";
 import {
@@ -238,7 +239,21 @@ async function handleModeratorConnection(
       if (parsed.type === "TEXT") {
         assertAllowed(user, "canCreateText");
       }
-      const created = await createPreviewElement(streamerId, parsed);
+      const emote =
+        parsed.emoteId && parsed.emoteProvider
+          ? await resolveEmote(streamerId, parsed.emoteProvider, parsed.emoteId)
+          : undefined;
+      const created = await createPreviewElement(streamerId, {
+        ...parsed,
+        emote: emote
+          ? {
+              name: emote.name,
+              sourceUrl: emote.sourceUrl,
+              width: emote.width,
+              height: emote.height
+            }
+          : undefined
+      });
       await writeAudit(streamerId, user.id, "preview.added", { previewId: created.id });
       await emitPreviewState(io, streamerId);
     });

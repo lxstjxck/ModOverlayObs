@@ -55,40 +55,61 @@ model Session {
 }
 
 model Streamer {
-  id              String           @id @default(cuid())
-  displayName     String
-  overlayToken    String           @unique
-  canvasWidth     Int              @default(1920)
-  canvasHeight    Int              @default(1080)
-  settingsJson    String           @default("{}")
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  media           Media[]
-  previewElements PreviewElement[]
-  liveInstances   LiveInstance[]
-  auditLogs       AuditLog[]
+  id                  String           @id @default(cuid())
+  displayName         String
+  overlayToken        String           @unique
+  canvasWidth         Int              @default(1920)
+  canvasHeight        Int              @default(1080)
+  settingsJson        String           @default("{}")
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+  media               Media[]
+  previewElements     PreviewElement[]
+  liveInstances       LiveInstance[]
+  auditLogs           AuditLog[]
+  twitchLogin         String?
+  twitchBroadcasterId String?
+  customEmotes        CustomEmote[]
+}
+
+model CustomEmote {
+  id          String   @id @default(cuid())
+  streamerId  String
+  provider    String
+  externalId  String?
+  name        String
+  sourceUrl   String
+  previewUrl  String
+  animated    Boolean  @default(false)
+  width       Int?
+  height      Int?
+  createdAt   DateTime @default(now())
+  createdById String?
+  streamer    Streamer @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+
+  @@index([streamerId])
 }
 
 model Media {
-  id             String           @id @default(cuid())
-  streamerId     String
-  filename       String           @unique
-  originalName   String
-  mimeType       String
-  type           MediaType
-  size           Int
-  url            String
-  durationMs     Int?
-  width          Int?
-  height         Int?
-  uploadedById   String?
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  streamer       Streamer         @relation(fields: [streamerId], references: [id], onDelete: Cascade)
-  uploadedBy     User?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  id              String           @id @default(cuid())
+  streamerId      String
+  filename        String           @unique
+  originalName    String
+  mimeType        String
+  type            MediaType
+  size            Int
+  url             String
+  durationMs      Int?
+  width           Int?
+  height          Int?
+  uploadedById    String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  streamer        Streamer         @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  uploadedBy      User?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
   previewElements PreviewElement[]
-  liveInstances  LiveInstance[]
-  auditLogs      AuditLog[]
+  liveInstances   LiveInstance[]
+  auditLogs       AuditLog[]
 
   @@index([streamerId])
   @@index([uploadedById])
@@ -167,16 +188,16 @@ model LiveInstance {
 }
 
 model AuditLog {
-  id           String    @id @default(cuid())
-  timestamp    DateTime  @default(now())
+  id           String   @id @default(cuid())
+  timestamp    DateTime @default(now())
   userId       String?
   streamerId   String
   action       String
   mediaId      String?
-  metadataJson String    @default("{}")
-  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
-  streamer     Streamer  @relation(fields: [streamerId], references: [id], onDelete: Cascade)
-  media        Media?    @relation(fields: [mediaId], references: [id], onDelete: SetNull)
+  metadataJson String   @default("{}")
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  streamer     Streamer @relation(fields: [streamerId], references: [id], onDelete: Cascade)
+  media        Media?   @relation(fields: [mediaId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([streamerId])

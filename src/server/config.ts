@@ -77,7 +77,9 @@ export const config = {
   maxTotalUploadSize: numberEnv("MAX_TOTAL_UPLOAD_SIZE", 5 * 1024 * 1024 * 1024),
   originAllowlist: buildAllowedOrigins(domain, publicOrigin, port),
   initialAdminUsername: process.env.INITIAL_ADMIN_USERNAME ?? "owner",
-  initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? defaultInitialPassword
+  initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? defaultInitialPassword,
+  twitchClientId: process.env.TWITCH_CLIENT_ID ?? "",
+  twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? ""
 };
 
 export const isProduction = config.nodeEnv === "production";

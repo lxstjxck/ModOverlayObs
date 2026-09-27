@@ -2,13 +2,7 @@ export type Role = "OWNER" | "ADMIN_MODERATOR" | "MODERATOR";
 export type MediaType = "IMAGE" | "GIF" | "VIDEO" | "AUDIO";
 export type ElementType = "IMAGE" | "GIF" | "VIDEO" | "AUDIO" | "TEXT";
 export type AnimationName =
-  | "none"
-  | "fade"
-  | "scale"
-  | "slide-left"
-  | "slide-right"
-  | "slide-up"
-  | "slide-down";
+  "none" | "fade" | "scale" | "slide-left" | "slide-right" | "slide-up" | "slide-down";
 
 export type PermissionFlag =
   | "canUploadImage"
@@ -38,6 +32,28 @@ export interface StreamerView {
   canvasWidth: number;
   canvasHeight: number;
   overlayToken?: string;
+  twitchLogin?: string | null;
+  twitchBroadcasterId?: string | null;
+}
+
+export type EmoteProviderName = "twitch" | "7tv" | "custom";
+
+export interface ChannelEmote {
+  id: string;
+  provider: EmoteProviderName;
+  name: string;
+  animated: boolean;
+  previewUrl: string;
+  sourceUrl: string;
+  width?: number;
+  height?: number;
+}
+
+export interface ChannelEmotesResponse {
+  twitch: ChannelEmote[];
+  sevenTv: ChannelEmote[];
+  custom: ChannelEmote[];
+  errors: { twitch?: string; sevenTv?: string };
 }
 
 export interface MediaItem {

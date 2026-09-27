@@ -61,6 +61,8 @@ The project is designed for one streamer and a trusted moderator team.
 
 ## Media and OBS rules
 
+Channel Emotes use Twitch and 7TV CDN URLs; never download them into `uploads/` or count them in upload quota. Clicking an emote creates a preview element in SPAWN only. It never pushes live. Use the existing CanvasStage and transient `preview:transform` pipeline. Provider failures must be isolated. Twitch credentials remain server-side.
+
 Canvas drag and resize use transient `preview:transform` events that the server validates and relays as `overlay:transform` without persistence. On pointer release, `preview:update` writes the final transform to SQLite and broadcasts canonical state. Reconnect always loads canonical state; do not use transient frames as persisted state.
 
 When touching media behavior, check all affected surfaces:

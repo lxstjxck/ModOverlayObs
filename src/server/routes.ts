@@ -3,7 +3,12 @@ import express from "express";
 import crypto from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
-import { loginSchema, mediaUrlSchema } from "../shared/validation";
+import {
+  loginSchema,
+  mediaUrlSchema,
+  twitchChannelSchema,
+  customEmoteSchema
+} from "../shared/validation";
 import {
   createSession,
   destroySession,
@@ -15,6 +20,7 @@ import {
   type AuthenticatedRequest
 } from "./auth";
 import { config } from "./config";
+import { clearEmoteCache, createCustomEmote, getChannelEmotes } from "./emotes";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
@@ -51,6 +57,13 @@ const uploadRateLimit = createRateLimitMiddleware({
   windowMs: 60 * 60_000,
   message: "Too many uploads. Try again later.",
   key: (request) => `upload:${(request as AuthenticatedRequest).user.id}`
+});
+
+const emoteMutationLimit = createRateLimitMiddleware({
+  max: 30,
+  windowMs: 60_000,
+  message: "Too many emote changes",
+  key: (request) => `emote:${(request as AuthenticatedRequest).user.id}`
 });
 
 export function createAppRouter(): express.Router {
@@ -99,6 +112,105 @@ export function createAppRouter(): express.Router {
     const streamer = await getDefaultStreamer();
     response.json({ media: await listMedia(streamer.id) });
   });
+
+  router.get("/emotes", requireAuth, async (_request, response) => {
+    const streamer = await getDefaultStreamer();
+    response.json(await getChannelEmotes(streamer));
+  });
+
+  router.patch(
+    "/streamer/twitch",
+    requireAuth,
+    requirePermission("canEditPreview"),
+    emoteMutationLimit,
+    async (request, response) => {
+      const parsed = twitchChannelSchema.safeParse(request.body);
+      if (!parsed.success) {
+        response.status(400).json({ error: "Invalid Twitch login" });
+        return;
+      }
+      const streamer = await getDefaultStreamer();
+      const updated = await prisma.streamer.update({
+        where: { id: streamer.id },
+        data: {
+          twitchLogin: parsed.data.login,
+          twitchBroadcasterId:
+            parsed.data.broadcasterId ??
+            (streamer.twitchLogin === parsed.data.login ? streamer.twitchBroadcasterId : null)
+        }
+      });
+      clearEmoteCache(streamer.id);
+      await writeAudit(
+        streamer.id,
+        (request as AuthenticatedRequest).user.id,
+        "streamer.twitch_changed",
+        { login: parsed.data.login }
+      );
+      response.json({ streamer: toStreamerView(updated) });
+    }
+  );
+
+  router.post(
+    "/emotes/custom",
+    requireAuth,
+    requirePermission("canUploadImage"),
+    emoteMutationLimit,
+    async (request, response) => {
+      const parsed = customEmoteSchema.safeParse(request.body);
+      if (!parsed.success) {
+        response.status(400).json({ error: "Invalid emote URL or name" });
+        return;
+      }
+      const streamer = await getDefaultStreamer();
+      try {
+        const emote = await createCustomEmote(
+          streamer.id,
+          (request as AuthenticatedRequest).user.id,
+          parsed.data
+        );
+        await writeAudit(
+          streamer.id,
+          (request as AuthenticatedRequest).user.id,
+          "emote.custom_added",
+          { emoteId: emote.id }
+        );
+        response.status(201).json({ emote });
+      } catch (error) {
+        response
+          .status(400)
+          .json({ error: error instanceof Error ? error.message : "Invalid emote" });
+      }
+    }
+  );
+
+  router.delete(
+    "/emotes/custom/:id",
+    requireAuth,
+    requirePermission("canDeleteMedia"),
+    emoteMutationLimit,
+    async (request, response) => {
+      const id = readRouteParam(request.params.id);
+      if (!id) {
+        response.status(400).json({ error: "Invalid emote id" });
+        return;
+      }
+      const streamer = await getDefaultStreamer();
+      const result = await prisma.customEmote.deleteMany({
+        where: { id, streamerId: streamer.id }
+      });
+      if (!result.count) {
+        response.status(404).json({ error: "Emote not found" });
+        return;
+      }
+      await writeAudit(
+        streamer.id,
+        (request as AuthenticatedRequest).user.id,
+        "emote.custom_deleted",
+        { emoteId: id }
+      );
+      response.json({ ok: true });
+    }
+  );
 
   router.post("/media/url", requireAuth, uploadRateLimit, async (request, response) => {
     const parsed = mediaUrlSchema.safeParse(request.body);

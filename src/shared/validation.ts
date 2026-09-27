@@ -42,15 +42,40 @@ export const elementPatchSchema = z
 export const previewAddSchema = z
   .object({
     mediaId: z.string().min(1).optional(),
+    emoteId: z.string().min(1).max(160).optional(),
+    emoteProvider: z.enum(["twitch", "7tv", "custom"]).optional(),
     type: z.enum(["TEXT"]).optional(),
     text: z.string().max(4000).optional(),
     x: z.number().finite().optional(),
     y: z.number().finite().optional()
   })
   .strict()
-  .refine((value) => Boolean(value.mediaId) || value.type === "TEXT", {
-    message: "mediaId or text type is required"
-  });
+  .refine(
+    (value) =>
+      Boolean(value.mediaId) ||
+      value.type === "TEXT" ||
+      Boolean(value.emoteId && value.emoteProvider),
+    {
+      message: "mediaId, emote, or text type is required"
+    }
+  );
+
+export const twitchChannelSchema = z
+  .object({
+    login: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(/^[a-z0-9_]{3,25}$/),
+    broadcasterId: z
+      .string()
+      .regex(/^\d{1,24}$/)
+      .optional()
+  })
+  .strict();
+export const customEmoteSchema = z
+  .object({ url: z.string().url().max(2048), name: z.string().trim().min(1).max(80).optional() })
+  .strict();
 
 export const mediaUrlSchema = z
   .object({
