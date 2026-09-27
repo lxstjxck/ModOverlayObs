@@ -13,6 +13,8 @@ interface CanvasStageProps {
   zoom: "fit" | 0.25 | 0.5 | 0.75 | 1;
   onSelect?: (id: string) => void;
   onUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
+  onTransientUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
+  onCommitUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
 }
 
 type ResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -43,9 +45,11 @@ export function CanvasStage({
   selectedId,
   zoom,
   onSelect,
-  onUpdate
+  onUpdate,
+  onTransientUpdate,
+  onCommitUpdate
 }: CanvasStageProps) {
-  const canEdit = mode === "workspace" && Boolean(onUpdate);
+  const canEdit = mode === "workspace" && Boolean(onTransientUpdate ?? onUpdate);
   const bounds = getStageBounds(streamer, mode);
   const canvasStyle =
     zoom === "fit"
@@ -88,8 +92,10 @@ export function CanvasStage({
     const pointerId = event.pointerId;
     const currentTarget = event.currentTarget;
     currentTarget.setPointerCapture(pointerId);
+    let latestPatch: Partial<OverlayElement> | null = null;
 
     function handleMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId) return;
       const dx = ((moveEvent.clientX - drag.startX) / drag.rect.width) * bounds.width;
       const dy = ((moveEvent.clientY - drag.startY) / drag.rect.height) * bounds.height;
       if (drag.kind === "move") {
@@ -108,33 +114,37 @@ export function CanvasStage({
             disabled: moveEvent.shiftKey
           }
         );
-        onUpdate?.(drag.id, {
+        latestPatch = {
           x: Math.round(next.x),
           y: Math.round(next.y)
-        });
+        };
       } else {
         const resized = resizeElement(drag.original, drag.handle ?? "se", dx, dy, moveEvent);
-        onUpdate?.(
-          drag.id,
+        latestPatch =
           "props" in resized
             ? resized
             : applyResizeSnap(resized, {
                 streamer,
                 threshold: (12 / drag.rect.width) * bounds.width,
                 disabled: moveEvent.altKey
-              })
-        );
+              });
       }
+      (onTransientUpdate ?? onUpdate)?.(drag.id, latestPatch);
     }
 
-    function handleUp() {
+    function handleUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) return;
+      handleMove(upEvent);
+      if (latestPatch) onCommitUpdate?.(drag.id, latestPatch);
       currentTarget.releasePointerCapture(pointerId);
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
     }
 
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
   }
 
   return (
@@ -157,6 +167,7 @@ export function CanvasStage({
           {sortElements(elements).map((element) => (
             <div
               key={element.id}
+              data-stage-element-id={element.id}
               className={`stage-element ${selectedId === element.id ? "selected" : ""} ${
                 element.visible ? "" : "is-hidden"
               }`}

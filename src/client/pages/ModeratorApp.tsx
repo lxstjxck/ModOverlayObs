@@ -11,6 +11,7 @@ import { io, type Socket } from "socket.io-client";
 import type {
   MediaItem,
   MediaType,
+  ElementTransform,
   OverlayElement,
   PermissionMap,
   PresenceState,
@@ -53,6 +54,10 @@ export function ModeratorApp() {
   const pendingPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const inFlightPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const previewPatchTimers = useRef(new Map<string, number>());
+  const transientPatches = useRef(new Map<string, Partial<OverlayElement>>());
+  const transformTimers = useRef(new Map<string, number>());
+  const lastTransformSent = useRef(new Map<string, number>());
+  const lastDebugPing = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -89,16 +94,48 @@ export function ModeratorApp() {
     socket.on("access:revoked", () => {
       window.location.href = "/login";
     });
-    socket.on("preview:state", (state: OverlayElement[]) =>
+    socket.on("preview:state", (state: OverlayElement[]) => {
+      const reconciled = reconcilePreview(
+        state,
+        inFlightPreviewPatches.current,
+        pendingPreviewPatches.current
+      );
       setPreview(
-        reconcilePreview(state, inFlightPreviewPatches.current, pendingPreviewPatches.current)
-      )
-    );
+        reconciled.map((item) => {
+          const patch = transientPatches.current.get(item.id);
+          return patch ? mergeElementPatch(item, patch) : item;
+        })
+      );
+    });
+    socket.on("preview:transform", (transform: ElementTransform) => {
+      const { crop, ...geometry } = transform;
+      setPreview((items) =>
+        items.map((item) =>
+          item.id === transform.id
+            ? mergeElementPatch(item, {
+                ...geometry,
+                props: crop
+                  ? {
+                      ...item.props,
+                      cropLeft: crop.left,
+                      cropRight: crop.right,
+                      cropTop: crop.top,
+                      cropBottom: crop.bottom
+                    }
+                  : undefined
+              })
+            : item
+        )
+      );
+    });
     socket.on("disconnect", () => {
       for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
       previewPatchTimers.current.clear();
       pendingPreviewPatches.current.clear();
       inFlightPreviewPatches.current.clear();
+      transientPatches.current.clear();
+      for (const timer of transformTimers.current.values()) window.clearTimeout(timer);
+      transformTimers.current.clear();
       setError("Connection lost. Reconnecting; unconfirmed changes may not have been saved.");
     });
     socket.on("presence:update", (state: PresenceState) => setPresence(state));
@@ -116,6 +153,9 @@ export function ModeratorApp() {
       }
       previewPatchTimers.current.clear();
       pendingPreviewPatches.current.clear();
+      for (const timer of transformTimers.current.values()) window.clearTimeout(timer);
+      transformTimers.current.clear();
+      transientPatches.current.clear();
     };
   }, []);
 
@@ -222,13 +262,72 @@ export function ModeratorApp() {
     schedulePreviewPatch(id, patch);
   }
 
+  function updateTransformLocal(id: string, patch: Partial<OverlayElement>) {
+    if (!canEditCanvas || !socketRef.current?.connected) return;
+    setPreview((items) =>
+      items.map((item) => (item.id === id ? mergeElementPatch(item, patch) : item))
+    );
+    transientPatches.current.set(id, patch);
+    const send = () => {
+      transformTimers.current.delete(id);
+      const latest = transientPatches.current.get(id);
+      if (!latest || !socketRef.current?.connected) return;
+      lastTransformSent.current.set(id, performance.now());
+      const payload = {
+        id,
+        x: latest.x,
+        y: latest.y,
+        width: latest.width,
+        height: latest.height,
+        rotation: latest.rotation,
+        crop: cropFromProps(latest.props)
+      } satisfies ElementTransform;
+      if (import.meta.env.DEV && performance.now() - lastDebugPing.current > 1000) {
+        lastDebugPing.current = performance.now();
+        const started = performance.now();
+        socketRef.current
+          .timeout(2000)
+          .volatile.emit("preview:transform", payload, (error: Error | null, ok: boolean) => {
+            if (!error && ok)
+              document.documentElement.dataset.transformRttMs = String(
+                Math.round(performance.now() - started)
+              );
+          });
+      } else {
+        socketRef.current.volatile.emit("preview:transform", payload);
+      }
+    };
+    const wait = Math.max(
+      0,
+      25 - (performance.now() - (lastTransformSent.current.get(id) ?? -Infinity))
+    );
+    if (wait === 0) {
+      if (transformTimers.current.has(id)) window.clearTimeout(transformTimers.current.get(id));
+      send();
+    } else if (!transformTimers.current.has(id)) {
+      transformTimers.current.set(id, window.setTimeout(send, wait));
+    }
+  }
+
+  function commitTransform(id: string, patch: Partial<OverlayElement>) {
+    const timer = transformTimers.current.get(id);
+    if (timer !== undefined) window.clearTimeout(timer);
+    transformTimers.current.delete(id);
+    transientPatches.current.delete(id);
+    patchPreviewLocal(id, patch);
+    const flushTimer = previewPatchTimers.current.get(id);
+    if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+    previewPatchTimers.current.delete(id);
+    schedulePreviewFlush(id, 0);
+  }
+
   function schedulePreviewPatch(id: string, patch: Partial<OverlayElement>) {
     const existing = pendingPreviewPatches.current.get(id);
     pendingPreviewPatches.current.set(id, existing ? mergePatch(existing, patch) : patch);
     schedulePreviewFlush(id);
   }
 
-  function schedulePreviewFlush(id: string) {
+  function schedulePreviewFlush(id: string, delay = 80) {
     if (previewPatchTimers.current.has(id)) {
       return;
     }
@@ -254,7 +353,7 @@ export function ModeratorApp() {
             if (pendingPreviewPatches.current.has(id)) schedulePreviewFlush(id);
           });
       }
-    }, 80);
+    }, delay);
     previewPatchTimers.current.set(id, timer);
   }
 
@@ -349,7 +448,8 @@ export function ModeratorApp() {
           selectedId={selectedId}
           zoom={zoom}
           onSelect={(id) => setSelectedId(id || null)}
-          onUpdate={canEditCanvas ? patchPreviewLocal : undefined}
+          onTransientUpdate={canEditCanvas ? updateTransformLocal : undefined}
+          onCommitUpdate={canEditCanvas ? commitTransform : undefined}
         />
 
         <PropertiesPanel
@@ -374,6 +474,24 @@ export function ModeratorApp() {
       </footer>
     </main>
   );
+}
+
+function cropFromProps(props: Record<string, unknown> | undefined): ElementTransform["crop"] {
+  if (!props) return undefined;
+  const { cropLeft, cropRight, cropTop, cropBottom } = props;
+  if (
+    [cropLeft, cropRight, cropTop, cropBottom].every(
+      (value) => typeof value === "number" && Number.isFinite(value)
+    )
+  ) {
+    return {
+      left: cropLeft as number,
+      right: cropRight as number,
+      top: cropTop as number,
+      bottom: cropBottom as number
+    };
+  }
+  return undefined;
 }
 
 function mergeElementPatch(

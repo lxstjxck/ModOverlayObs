@@ -61,6 +61,8 @@ The project is designed for one streamer and a trusted moderator team.
 
 ## Media and OBS rules
 
+Canvas drag and resize use transient `preview:transform` events that the server validates and relays as `overlay:transform` without persistence. On pointer release, `preview:update` writes the final transform to SQLite and broadcasts canonical state. Reconnect always loads canonical state; do not use transient frames as persisted state.
+
 When touching media behavior, check all affected surfaces:
 
 - moderator preview;

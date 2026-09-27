@@ -225,6 +225,88 @@ afterAll(async () => {
 });
 
 describe("realtime access revocation", () => {
+  it("relays transient geometry without a write and restores committed geometry on reconnect", async () => {
+    const element = await prisma.previewElement.create({
+      data: { streamerId, type: "TEXT", name: "drag", text: "drag" }
+    });
+    const moderator = await socketClient({ session: "owner-session" });
+    const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const moving = event<{ id: string; x: number }>(overlay, "overlay:transform");
+    moderator.emit("preview:transform", { id: element.id, x: 900 });
+    expect(await moving).toMatchObject({ id: element.id, x: 900 });
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
+      100
+    );
+
+    const canonical = event<Array<{ id: string; x: number }>>(overlay, "overlay:state");
+    expect(
+      await moderator.timeout(3000).emitWithAck("preview:update", {
+        id: element.id,
+        patch: { x: 900 }
+      })
+    ).toBe(true);
+    expect((await canonical).find((item) => item.id === element.id)?.x).toBe(900);
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
+      900
+    );
+
+    const reconnected = connect(baseUrl, {
+      transports: ["websocket"],
+      reconnection: false,
+      autoConnect: false,
+      query: { overlayToken: "overlay-old" }
+    });
+    clients.push(reconnected);
+    const restored = event<Array<{ id: string; x: number }>>(reconnected, "overlay:state");
+    reconnected.connect();
+    expect((await restored).find((item) => item.id === element.id)?.x).toBe(900);
+  });
+
+  it("rejects unauthorized, unknown, and invalid transforms", async () => {
+    const element = await prisma.previewElement.create({
+      data: { streamerId, type: "TEXT", name: "drag", text: "drag" }
+    });
+    const denied = await socketClient({ session: "mod-session" });
+    const owner = await socketClient({ session: "owner-session" });
+    const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    for (const [socket, payload, message] of [
+      [denied, { id: element.id, x: 4 }, "Permission denied"],
+      [owner, { id: "unknown", x: 4 }, "Element not found"],
+      [owner, { id: element.id, x: 4, props: { playbackCommand: "play" } }, "Unrecognized key"]
+    ] as const) {
+      const failure = event<string>(socket, "app:error");
+      socket.emit("preview:transform", payload);
+      expect(await failure).toContain(message);
+    }
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
+      100
+    );
+    expect(overlay.connected).toBe(true);
+  });
+
+  it("allows normal transform bursts and caps a flood", async () => {
+    const element = await prisma.previewElement.create({
+      data: { streamerId, type: "TEXT", name: "drag", text: "drag" }
+    });
+    const moderator = await socketClient({ session: "owner-session" });
+    const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    let received = 0;
+    overlay.on("overlay:transform", () => {
+      received += 1;
+    });
+    for (let x = 0; x < 60; x += 1) {
+      moderator.emit("preview:transform", { id: element.id, x });
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+    await expect.poll(() => received).toBeGreaterThanOrEqual(50);
+    const beforeFlood = received;
+    for (let x = 60; x < 260; x += 1) moderator.emit("preview:transform", { id: element.id, x });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(received).toBeLessThanOrEqual(beforeFlood + 120);
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
+      100
+    );
+  });
   it("logout disconnects every socket for that session, but preserves another session", async () => {
     await addSession(ownerId, "other-session");
     const first = await socketClient({ session: "owner-session" });

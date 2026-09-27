@@ -69,6 +69,28 @@ export const mediaUrlSchema = z
   }, "Only http:// and https:// media URLs are allowed");
 
 export const idSchema = z.object({ id: z.string().min(1) }).strict();
+export const elementTransformSchema = z
+  .object({
+    id: z.string().min(1),
+    x: elementPatchSchema.shape.x,
+    y: elementPatchSchema.shape.y,
+    width: elementPatchSchema.shape.width,
+    height: elementPatchSchema.shape.height,
+    rotation: elementPatchSchema.shape.rotation,
+    crop: z
+      .object({
+        left: z.number().finite().min(0).max(10000),
+        right: z.number().finite().min(0).max(10000),
+        top: z.number().finite().min(0).max(10000),
+        bottom: z.number().finite().min(0).max(10000)
+      })
+      .strict()
+      .optional()
+  })
+  .strict()
+  .refine(({ x, y, width, height, rotation, crop }) =>
+    [x, y, width, height, rotation, crop].some((value) => value !== undefined)
+  );
 export const liveShowSchema = z.object({ previewId: z.string().min(1) }).strict();
 export const liveUpdateSchema = z
   .object({

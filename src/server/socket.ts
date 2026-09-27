@@ -3,6 +3,7 @@ import { Server, type Socket } from "socket.io";
 import type { PermissionFlag, PresenceState } from "../shared/types";
 import {
   elementPatchSchema,
+  elementTransformSchema,
   idSchema,
   liveShowSchema,
   liveUpdateSchema,
@@ -51,10 +52,15 @@ const overlaysByStreamer = new Map<string, Set<string>>();
 const liveTimers = new Map<string, NodeJS.Timeout>();
 const socketConnectionLimiter = new WindowRateLimiter(60, 60_000);
 const socketEventLimiter = new WindowRateLimiter(300, 10_000);
+const socketTransformLimiter = new WindowRateLimiter(900, 10_000);
+const socketTransformBurstLimiter = new WindowRateLimiter(120, 1_000);
+const previewIdsByStreamer = new Map<string, Set<string>>();
 
 setInterval(() => {
   socketConnectionLimiter.prune();
   socketEventLimiter.prune();
+  socketTransformLimiter.prune();
+  socketTransformBurstLimiter.prune();
 }, 60_000).unref();
 
 export function configureSocket(httpServer: HttpServer): Server {
@@ -193,6 +199,7 @@ async function handleOverlayConnection(
     emitPresence(io, streamerId);
   });
   const state = await getPreviewState(streamerId);
+  if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
   if (!socket.connected) return;
   socket.emit("overlay:state", state);
   emitPresence(io, streamerId);
@@ -215,10 +222,15 @@ async function handleModeratorConnection(
     emitPresence(io, streamerId);
   });
 
-  socket.emit("preview:state", await getPreviewState(streamerId));
+  const initialPreview = await getPreviewState(streamerId);
+  if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
+  socket.emit("preview:state", initialPreview);
   socket.emit("live:state", await getLiveState(streamerId));
   if (!socket.connected) return;
   emitPresence(io, streamerId);
+  let transformOrdinal = 0;
+  let forwardedTransformOrdinal = 0;
+  let transformEpoch = 0;
 
   socket.on("preview:add", async (payload) => {
     await guarded(socket, user, "canEditPreview", async (user) => {
@@ -233,6 +245,7 @@ async function handleModeratorConnection(
   });
 
   socket.on("preview:update", async (payload, acknowledge) => {
+    transformEpoch += 1;
     const ok = await guarded(socket, user, "canEditPreview", async () => {
       const parsed = idSchema
         .extend({
@@ -242,6 +255,33 @@ async function handleModeratorConnection(
       await updatePreviewElement(streamerId, parsed.id, parsed.patch);
       await emitPreviewState(io, streamerId);
     });
+    if (typeof acknowledge === "function") acknowledge(ok);
+  });
+
+  socket.on("preview:transform", async (payload, acknowledge) => {
+    if (
+      !socketTransformLimiter.consume(`socket:transform:${socket.id}`).allowed ||
+      !socketTransformBurstLimiter.consume(`socket:transform:burst:${socket.id}`).allowed
+    )
+      return;
+    const ordinal = ++transformOrdinal;
+    const epoch = transformEpoch;
+    const ok = await guarded(
+      socket,
+      user,
+      "canEditPreview",
+      async () => {
+        const transform = elementTransformSchema.parse(payload);
+        if (!previewIdsByStreamer.get(streamerId)?.has(transform.id)) {
+          throw new Error("Element not found");
+        }
+        if (epoch !== transformEpoch || ordinal <= forwardedTransformOrdinal) return;
+        forwardedTransformOrdinal = ordinal;
+        io.to(overlayRoom(streamerId)).volatile.emit("overlay:transform", transform);
+        socket.to(moderatorRoom(streamerId)).volatile.emit("preview:transform", transform);
+      },
+      false
+    );
     if (typeof acknowledge === "function") acknowledge(ok);
   });
 
@@ -336,11 +376,11 @@ async function guarded(
   socket: Socket,
   user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>,
   permission: PermissionFlag,
-  action: (user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>) => Promise<void>
+  action: (user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>) => Promise<void>,
+  applyEventLimit = true
 ): Promise<boolean> {
   try {
-    const rateLimit = socketEventLimiter.consume(`socket:event:${socket.id}`);
-    if (!rateLimit.allowed) {
+    if (applyEventLimit && !socketEventLimiter.consume(`socket:event:${socket.id}`).allowed) {
       socket.emit("app:error", "Too many realtime actions. Slow down and try again.");
       return false;
     }
@@ -372,8 +412,13 @@ function assertAllowed(
 
 async function emitPreviewState(io: Server, streamerId: string): Promise<void> {
   const state = await getPreviewState(streamerId);
+  rememberPreviewIds(streamerId, state);
   io.to(moderatorRoom(streamerId)).emit("preview:state", state);
   io.to(overlayRoom(streamerId)).emit("overlay:state", state);
+}
+
+function rememberPreviewIds(streamerId: string, state: { id: string }[]): void {
+  previewIdsByStreamer.set(streamerId, new Set(state.map((item) => item.id)));
 }
 
 async function emitLiveState(io: Server, streamerId: string): Promise<void> {

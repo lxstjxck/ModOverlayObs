@@ -84,6 +84,16 @@ export interface OverlayElement {
   props: Record<string, unknown>;
 }
 
+export interface ElementTransform {
+  id: string;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  rotation?: number;
+  crop?: { left: number; right: number; top: number; bottom: number };
+}
+
 export interface PresenceState {
   overlayConnected: boolean;
   overlayCount: number;

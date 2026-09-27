@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import type { OverlayElement, StreamerView } from "../../shared/types";
+import type { ElementTransform, OverlayElement, StreamerView } from "../../shared/types";
 import { CanvasStage } from "../components/CanvasStage";
 import { overlayMediaUrl } from "../overlayMediaUrl";
 import {
@@ -26,6 +26,7 @@ export function OverlayPage({ token }: { token: string }) {
   const [canvas, setCanvas] = useState<OverlayElement[]>([]);
   const socketRef = useRef<Socket | null>(null);
   const appliedCommandKeys = useRef(new Map<string, string>());
+  const canonicalCanvas = useRef<OverlayElement[]>([]);
 
   useEffect(() => {
     document.documentElement.classList.add("overlay-document");
@@ -44,12 +45,41 @@ export function OverlayPage({ token }: { token: string }) {
     socketRef.current = socket;
     const clearCanvas = () => {
       setCanvas([]);
+      canonicalCanvas.current = [];
       appliedCommandKeys.current.clear();
     };
     socket.on("access:revoked", clearCanvas);
     socket.on("disconnect", clearCanvas);
     socket.on("connect_error", clearCanvas);
-    socket.on("overlay:state", (state: OverlayElement[]) => setCanvas(state));
+    socket.on("overlay:state", (state: OverlayElement[]) => {
+      canonicalCanvas.current = state;
+      setCanvas(state);
+    });
+    socket.on("overlay:transform", (transform: ElementTransform) => {
+      const base = canonicalCanvas.current.find((item) => item.id === transform.id);
+      const node = getStageElement(transform.id);
+      const stage = node?.closest<HTMLElement>(".stage-surface");
+      if (!base || !node || !stage) return;
+      const dx =
+        (((transform.x ?? base.x) - base.x) * stage.clientWidth) / defaultStreamer.canvasWidth;
+      const dy =
+        (((transform.y ?? base.y) - base.y) * stage.clientHeight) / defaultStreamer.canvasHeight;
+      node.style.transition = "transform 25ms linear, width 25ms linear, height 25ms linear";
+      node.style.transform = `translate3d(${dx}px, ${dy}px, 0) rotate(${transform.rotation ?? base.rotation}deg)`;
+      if (transform.width !== undefined)
+        node.style.width = `${(transform.width / defaultStreamer.canvasWidth) * 100}%`;
+      if (transform.height !== undefined)
+        node.style.height = `${(transform.height / defaultStreamer.canvasHeight) * 100}%`;
+      if (transform.crop) {
+        const media = node.querySelector<HTMLElement>(".media-element");
+        if (media)
+          media.style.clipPath = cropClipPath(
+            transform.crop,
+            transform.width ?? base.width,
+            transform.height ?? base.height
+          );
+      }
+    });
     socket.on("overlay:add", (element: OverlayElement) =>
       setCanvas((items) => [...items.filter((item) => item.id !== element.id), element])
     );
@@ -70,13 +100,38 @@ export function OverlayPage({ token }: { token: string }) {
     };
   }, [token]);
 
-  const onAirElements = useMemo(
-    () =>
-      canvas
-        .filter((element) => isElementInViewport(element, defaultStreamer))
-        .map((element) => ({ ...element, src: overlayMediaUrl(element.src, token) })),
+  const displayElements = useMemo(
+    () => canvas.map((element) => ({ ...element, src: overlayMediaUrl(element.src, token) })),
     [canvas, token]
   );
+  const onAirElements = useMemo(
+    () => displayElements.filter((element) => isElementInViewport(element, defaultStreamer)),
+    [displayElements]
+  );
+
+  useLayoutEffect(() => {
+    for (const element of displayElements) {
+      const node = getStageElement(element.id);
+      if (!node) continue;
+      node.style.transition = "";
+      node.style.transform = `rotate(${element.rotation}deg)`;
+      node.style.width = `${(element.width / defaultStreamer.canvasWidth) * 100}%`;
+      node.style.height = `${(element.height / defaultStreamer.canvasHeight) * 100}%`;
+      const media = node.querySelector<HTMLElement>(".media-element");
+      if (media) {
+        media.style.clipPath = cropClipPath(
+          {
+            left: Number(element.props.cropLeft) || 0,
+            right: Number(element.props.cropRight) || 0,
+            top: Number(element.props.cropTop) || 0,
+            bottom: Number(element.props.cropBottom) || 0
+          },
+          element.width,
+          element.height
+        );
+      }
+    }
+  }, [displayElements]);
 
   useEffect(() => {
     for (const element of onAirElements) {
@@ -94,7 +149,12 @@ export function OverlayPage({ token }: { token: string }) {
 
   return (
     <main className="overlay-page">
-      <CanvasStage mode="overlay" streamer={defaultStreamer} elements={onAirElements} zoom="fit" />
+      <CanvasStage
+        mode="overlay"
+        streamer={defaultStreamer}
+        elements={displayElements}
+        zoom="fit"
+      />
     </main>
   );
 }
@@ -102,6 +162,20 @@ export function OverlayPage({ token }: { token: string }) {
 function getPlayableMedia(id: string): PlayableNode | null {
   const node = document.querySelector(`[data-overlay-media-id="${CSS.escape(id)}"]`);
   return isPlayableNode(node) ? node : null;
+}
+
+function getStageElement(id: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `.stage-overlay [data-stage-element-id="${CSS.escape(id)}"]`
+  );
+}
+
+function cropClipPath(
+  crop: NonNullable<ElementTransform["crop"]>,
+  width: number,
+  height: number
+): string {
+  return `inset(${(crop.top / height) * 100}% ${(crop.right / width) * 100}% ${(crop.bottom / height) * 100}% ${(crop.left / width) * 100}%)`;
 }
 
 function applyPlaybackCommand(
