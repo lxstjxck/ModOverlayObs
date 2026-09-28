@@ -142,6 +142,8 @@ export async function createPreviewElement(
     text?: string;
     x?: number;
     y?: number;
+    width?: number;
+    height?: number;
     emote?: { name: string; sourceUrl: string; width?: number; height?: number };
   }
 ): Promise<OverlayElement> {
@@ -173,9 +175,13 @@ export async function createPreviewElement(
     });
     const isPortrait = media.width && media.height ? media.height > media.width : false;
     const width =
-      media.type === "AUDIO" ? 520 : media.type === "VIDEO" ? 480 : isPortrait ? 260 : 360;
+      payload.width ??
+      media.width ??
+      (media.type === "AUDIO" ? 520 : media.type === "VIDEO" ? 480 : isPortrait ? 260 : 360);
     const height =
-      media.type === "AUDIO" ? 120 : media.type === "VIDEO" ? 270 : isPortrait ? 360 : 240;
+      payload.height ??
+      media.height ??
+      (media.type === "AUDIO" ? 120 : media.type === "VIDEO" ? 270 : isPortrait ? 360 : 240);
     const x = payload.x ?? -width - 56;
     const y = payload.y ?? 120;
     const created = await prisma.previewElement.create({

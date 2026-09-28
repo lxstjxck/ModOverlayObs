@@ -1,5 +1,5 @@
 import { Copy, Eye, EyeOff, Pause, Play, RotateCcw, Square, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { OverlayElement } from "../../shared/types";
 import {
   isPlayableNode,
@@ -12,7 +12,8 @@ import {
   stopMediaNode,
   type PlayableNode
 } from "../mediaPlayback";
-import { formatClock, isPlayableMedia, isText } from "../utils";
+import { isPlayableMedia, isText } from "../utils";
+import { formatMediaPosition, parseMediaPosition } from "../mediaPosition";
 
 interface PropertiesPanelProps {
   selected: OverlayElement | null;
@@ -79,11 +80,6 @@ export function PropertiesPanel({
         <span>Properties</span>
       </div>
 
-      <label className="field">
-        Name
-        <input value={selected.name} onChange={(event) => update({ name: event.target.value })} />
-      </label>
-
       {isText(selected) && (
         <>
           <label className="field">
@@ -98,10 +94,6 @@ export function PropertiesPanel({
       )}
 
       <div className="grid-fields">
-        <NumberField label="X" value={selected.x} onChange={(x) => update({ x })} />
-        <NumberField label="Y" value={selected.y} onChange={(y) => update({ y })} />
-        <NumberField label="W" value={selected.width} onChange={(width) => update({ width })} />
-        <NumberField label="H" value={selected.height} onChange={(height) => update({ height })} />
         <NumberField
           label="Rot"
           value={selected.rotation}
@@ -116,7 +108,7 @@ export function PropertiesPanel({
           type="range"
           min={0}
           max={1}
-          step={0.01}
+          step={0.001}
           value={selected.opacity}
           onChange={(event) => update({ opacity: Number(event.target.value) })}
         />
@@ -204,17 +196,73 @@ function MediaControls({
   videoTime: { current: number; duration: number };
   update: (patch: Partial<OverlayElement>) => void;
 }) {
-  const [seekSeconds, setSeekSeconds] = useState(0);
+  const [positionText, setPositionText] = useState("00:00");
+  const [positionError, setPositionError] = useState("");
+  const [editingPosition, setEditingPosition] = useState(false);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubSeconds, setScrubSeconds] = useState(0);
+  const scrubSecondsRef = useRef(0);
+  const scrubbingRef = useRef(false);
+  const positionDraftRef = useRef("00:00");
+  const showHours = videoTime.duration >= 3600;
+
+  useEffect(() => {
+    setPositionText("00:00");
+    setPositionError("");
+    setEditingPosition(false);
+    setScrubbing(false);
+    scrubSecondsRef.current = 0;
+    scrubbingRef.current = false;
+    positionDraftRef.current = "00:00";
+  }, [selected.id]);
+
+  useEffect(() => {
+    if (!editingPosition && !positionError)
+      setPositionText(formatMediaPosition(videoTime.current, showHours));
+  }, [editingPosition, positionError, videoTime.current, showHours]);
+
   function seek(seconds: number) {
-    seekMediaNode(mediaElement, seconds);
+    const bounded = Math.min(
+      86400,
+      Math.max(0, videoTime.duration > 0 ? Math.min(seconds, videoTime.duration) : seconds)
+    );
+    seekMediaNode(mediaElement, bounded);
     update({
       props: {
         ...selected.props,
         playbackCommand: "seek",
-        seekSeconds: seconds,
+        seekSeconds: bounded,
         playbackCommandId: crypto.randomUUID()
       }
     });
+    setPositionText(formatMediaPosition(bounded, showHours));
+    positionDraftRef.current = formatMediaPosition(bounded, showHours);
+    setPositionError("");
+  }
+
+  function previewScrub(seconds: number) {
+    scrubSecondsRef.current = seconds;
+    scrubbingRef.current = true;
+    setScrubSeconds(seconds);
+    setScrubbing(true);
+    if (mediaElement instanceof HTMLMediaElement) seekMediaNode(mediaElement, seconds);
+  }
+
+  function commitScrub() {
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    setScrubbing(false);
+    seek(scrubSecondsRef.current);
+  }
+
+  function submitPosition() {
+    const seconds = parseMediaPosition(positionDraftRef.current);
+    if (seconds === null) {
+      setPositionError("Формат: 00:00 или 00:00:00");
+      setPositionText(positionDraftRef.current);
+      return;
+    }
+    seek(seconds);
   }
   function runCommand(command: "play" | "pause" | "stop" | "restart") {
     if (command === "play") {
@@ -237,60 +285,116 @@ function MediaControls({
 
   return (
     <div className="video-controls">
-      <div className="mini-toolbar">
-        <button type="button" title="Play" onClick={() => runCommand("play")}>
-          <Play size={15} />
+      <div className="mini-toolbar media-transport">
+        <button
+          type="button"
+          title="Воспроизвести"
+          aria-label="Воспроизвести"
+          onClick={() => runCommand("play")}
+        >
+          <Play size={19} />
         </button>
-        <button type="button" title="Pause" onClick={() => runCommand("pause")}>
-          <Pause size={15} />
+        <button type="button" title="Пауза" aria-label="Пауза" onClick={() => runCommand("pause")}>
+          <Pause size={19} />
         </button>
-        <button type="button" title="Stop" onClick={() => runCommand("stop")}>
-          <Square size={15} />
+        <button
+          type="button"
+          title="Остановить"
+          aria-label="Остановить"
+          onClick={() => runCommand("stop")}
+        >
+          <Square size={19} />
         </button>
-        <button type="button" title="Restart" onClick={() => runCommand("restart")}>
-          <RotateCcw size={15} />
+        <button
+          type="button"
+          title="Сначала"
+          aria-label="Сначала"
+          onClick={() => runCommand("restart")}
+        >
+          <RotateCcw size={19} />
         </button>
       </div>
       {mediaElement && (
-        <div className="timeline-row">
-          <span>{formatClock(videoTime.current)}</span>
+        <div className="media-timeline">
+          <div className="media-timeline-times">
+            <span>
+              {formatMediaPosition(scrubbing ? scrubSeconds : videoTime.current, showHours)}
+            </span>
+            <span>{formatMediaPosition(videoTime.duration, showHours)}</span>
+          </div>
           <input
             type="range"
+            aria-label="Перемотка по таймкоду"
             min={0}
             max={videoTime.duration || 1}
-            step={0.05}
-            value={Math.min(videoTime.current, videoTime.duration || 1)}
-            onChange={(event) => {
-              seek(Number(event.target.value));
+            step={0.01}
+            disabled={videoTime.duration <= 0}
+            value={Math.min(scrubbing ? scrubSeconds : videoTime.current, videoTime.duration || 1)}
+            onChange={(event) => previewScrub(Number(event.target.value))}
+            onPointerUp={commitScrub}
+            onPointerCancel={commitScrub}
+            onKeyDown={(event) => {
+              const { key } = event;
+              if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(key)) return;
+              event.preventDefault();
+              const current = scrubbingRef.current ? scrubSecondsRef.current : videoTime.current;
+              const delta = event.shiftKey ? 0.1 : event.altKey ? 10 : 1;
+              const next =
+                key === "Home"
+                  ? 0
+                  : key === "End"
+                    ? videoTime.duration
+                    : current + (key === "ArrowRight" ? delta : -delta);
+              previewScrub(Math.min(videoTime.duration, Math.max(0, next)));
             }}
+            onKeyUp={(event) => {
+              if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) commitScrub();
+            }}
+            onBlur={commitScrub}
           />
-          <span>{formatClock(videoTime.duration)}</span>
         </div>
       )}
-      <div className="timeline-row">
+      <form
+        className="media-position-row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submitPosition();
+        }}
+      >
         <label className="field">
-          Позиция, секунды
+          TIMECODE
           <input
-            type="number"
-            min={0}
-            max={86400}
-            value={seekSeconds}
-            onChange={(event) =>
-              setSeekSeconds(Math.max(0, Math.min(86400, Number(event.target.value))))
-            }
+            type="text"
+            inputMode="numeric"
+            placeholder={showHours ? "00:00:00" : "00:00"}
+            value={positionText}
+            aria-invalid={Boolean(positionError)}
+            aria-describedby={positionError ? "media-position-error" : undefined}
+            onFocus={() => {
+              positionDraftRef.current = positionText;
+              setEditingPosition(true);
+            }}
+            onBlur={() => setEditingPosition(false)}
+            onChange={(event) => {
+              positionDraftRef.current = event.target.value;
+              setPositionText(event.target.value);
+              setPositionError("");
+            }}
           />
         </label>
-        <button type="button" onClick={() => seek(seekSeconds)}>
-          Перейти
-        </button>
-      </div>
+        {positionError && (
+          <span className="media-position-error" id="media-position-error" role="alert">
+            {positionError}
+          </span>
+        )}
+      </form>
       <label className="field">
         Local Volume
         <input
           type="range"
           min={0}
           max={1}
-          step={0.01}
+          step={0.001}
           value={selected.previewVolume ?? 1}
           onChange={(event) => {
             const value = Number(event.target.value);
@@ -305,7 +409,7 @@ function MediaControls({
           type="range"
           min={0}
           max={1}
-          step={0.01}
+          step={0.001}
           value={selected.liveVolume}
           onChange={(event) => update({ liveVolume: Number(event.target.value) })}
         />

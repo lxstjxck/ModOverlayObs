@@ -1,17 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { buildYouTubeEmbedUrl, getYouTubeVideoId } from "../src/shared/mediaUrl";
+import {
+  buildYouTubeEmbedUrl,
+  detectMediaTypeFromUrl,
+  getYouTubeVideoId
+} from "../src/shared/mediaUrl";
 import { mediaUrlSchema } from "../src/shared/validation";
 
 describe("remote media validation", () => {
   it.each(["IMAGE", "GIF", "VIDEO", "AUDIO"])("accepts HTTPS links for %s", (type) => {
     expect(mediaUrlSchema.safeParse({ type, url: "https://example.com/media" }).success).toBe(true);
   });
-  it.each(["file:///C:/private.png", "javascript:alert(1)", "data:image/png;base64,AAAA"])("rejects non-web URLs: %s", (url) => {
-    expect(mediaUrlSchema.safeParse({ type: "IMAGE", url }).success).toBe(false);
-  });
+  it.each(["file:///C:/private.png", "javascript:alert(1)", "data:image/png;base64,AAAA"])(
+    "rejects non-web URLs: %s",
+    (url) => {
+      expect(mediaUrlSchema.safeParse({ type: "IMAGE", url }).success).toBe(false);
+    }
+  );
 });
 
 describe("media url helpers", () => {
+  it.each([
+    ["https://cdn.example.com/image.PNG?size=large", "IMAGE"],
+    ["https://cdn.example.com/animation.gif", "GIF"],
+    ["https://cdn.example.com/video.mp4", "VIDEO"],
+    ["https://cdn.example.com/audio.mp3", "AUDIO"],
+    ["https://cdn.example.com/image?format=webp", "IMAGE"],
+    ["https://youtu.be/OqPxaKs8xrk", "VIDEO"]
+  ] as const)("detects %s as %s", (url, type) => {
+    expect(detectMediaTypeFromUrl(url)).toBe(type);
+  });
+
+  it.each([
+    "https://cdn.example.com/media",
+    "https://example.com/watch?v=OqPxaKs8xrk",
+    "file:///private/video.mp4",
+    "not a url"
+  ])("does not guess the type of %s", (url) => {
+    expect(detectMediaTypeFromUrl(url)).toBeNull();
+  });
+
   it("extracts YouTube ids from watch urls", () => {
     expect(getYouTubeVideoId("https://www.youtube.com/watch?v=OqPxaKs8xrk")).toBe("OqPxaKs8xrk");
   });

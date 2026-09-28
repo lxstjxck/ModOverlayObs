@@ -1,4 +1,11 @@
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import { EyeOff } from "lucide-react";
 import { buildYouTubeEmbedUrl } from "../../shared/mediaUrl";
 import type { OverlayElement, StreamerView } from "../../shared/types";
@@ -10,7 +17,6 @@ interface CanvasStageProps {
   streamer: StreamerView;
   elements: OverlayElement[];
   selectedId?: string | null;
-  zoom: "fit" | 0.25 | 0.5 | 0.75 | 1;
   onSelect?: (id: string) => void;
   onUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
   onTransientUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
@@ -18,15 +24,8 @@ interface CanvasStageProps {
 }
 
 type ResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
-
-interface StageBounds {
-  minX: number;
-  minY: number;
-  width: number;
-  height: number;
-  liveLeft: number;
-  liveTop: number;
-}
+type ElementBounds = Pick<OverlayElement, "x" | "y" | "width" | "height">;
+const SNAP_DISTANCE_PX = 10;
 
 interface DragState {
   kind: "move" | "resize";
@@ -38,26 +37,145 @@ interface DragState {
   rect: DOMRect;
 }
 
+interface PanDrag {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+}
+
 export function CanvasStage({
   mode,
   streamer,
   elements,
   selectedId,
-  zoom,
   onSelect,
   onUpdate,
   onTransientUpdate,
   onCommitUpdate
 }: CanvasStageProps) {
   const canEdit = mode === "workspace" && Boolean(onTransientUpdate ?? onUpdate);
-  const bounds = getStageBounds(streamer, mode);
-  const canvasStyle =
-    zoom === "fit"
-      ? undefined
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const panDrag = useRef<PanDrag | null>(null);
+  const zoomRef = useRef(1);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const stagingSide = Math.max(540, Math.round(streamer.canvasWidth * 0.3));
+  const stagingTop = Math.max(170, Math.round(streamer.canvasHeight * 0.16));
+  const stagingBottom = Math.max(390, Math.round(streamer.canvasHeight * 0.36));
+  const fitScale = calculateFitScale(
+    viewportSize.width,
+    viewportSize.height,
+    streamer.canvasWidth,
+    streamer.canvasHeight
+  );
+  const scale = fitScale * zoom;
+
+  useLayoutEffect(() => {
+    if (!viewportRef.current) return;
+    const viewport = viewportRef.current;
+    const measure = () => {
+      setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(viewport);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "workspace" || !viewportRef.current) return;
+    const viewport = viewportRef.current;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        const current = zoomRef.current;
+        const next = Math.min(6, Math.max(0.25, current * Math.exp(-event.deltaY * 0.0015)));
+        if (next === current) return;
+        const rect = viewport.getBoundingClientRect();
+        const focusX = event.clientX - rect.left - rect.width / 2;
+        const focusY = event.clientY - rect.top - rect.height / 2;
+        const ratio = next / current;
+        setPan((previous) => ({
+          x: focusX - (focusX - previous.x) * ratio,
+          y: focusY - (focusY - previous.y) * ratio
+        }));
+        zoomRef.current = next;
+        setZoom(next);
+      } else {
+        setPan((previous) => ({
+          x: previous.x - (event.shiftKey ? event.deltaY : event.deltaX),
+          y: previous.y - (event.shiftKey ? 0 : event.deltaY)
+        }));
+      }
+    };
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", onWheel);
+  }, [mode]);
+
+  const overlayGeometry = calculateOverlayGeometry(
+    viewportSize.width,
+    viewportSize.height,
+    streamer.canvasWidth,
+    streamer.canvasHeight
+  );
+  const surfaceStyle: CSSProperties =
+    mode === "workspace"
+      ? {
+          width: streamer.canvasWidth,
+          height: streamer.canvasHeight,
+          left:
+            viewportSize.width / 2 +
+            pan.x +
+            ((stagingSide - 100 - streamer.canvasWidth) * scale) / 2,
+          top:
+            viewportSize.height / 2 +
+            pan.y +
+            ((stagingTop - stagingBottom - streamer.canvasHeight) * scale) / 2,
+          transform: `scale(${scale})`
+        }
       : {
-          width: `${bounds.width * zoom}px`,
-          minWidth: `${bounds.width * zoom}px`
+          width: streamer.canvasWidth,
+          height: streamer.canvasHeight,
+          left: overlayGeometry.left,
+          top: overlayGeometry.top,
+          transform: `scale(${overlayGeometry.scale})`,
+          transformOrigin: "top left"
         };
+
+  function startPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (mode !== "workspace" || (event.button !== 0 && event.button !== 1)) return;
+    if (event.button === 0 && (event.target as HTMLElement).closest(".stage-element")) return;
+    event.preventDefault();
+    panDrag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: pan.x,
+      y: pan.y
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function movePan(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = panDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setPan({ x: drag.x + event.clientX - drag.startX, y: drag.y + event.clientY - drag.startY });
+  }
+
+  function endPan(event: ReactPointerEvent<HTMLDivElement>) {
+    if (panDrag.current?.pointerId !== event.pointerId) return;
+    panDrag.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
 
   function startDrag(
     event: ReactPointerEvent<HTMLElement>,
@@ -65,6 +183,7 @@ export function CanvasStage({
     kind: DragState["kind"],
     handle?: ResizeHandle
   ) {
+    if (event.button !== 0) return;
     if (!canEdit) {
       onSelect?.(element.id);
       return;
@@ -96,38 +215,49 @@ export function CanvasStage({
 
     function handleMove(moveEvent: PointerEvent) {
       if (moveEvent.pointerId !== pointerId) return;
-      const dx = ((moveEvent.clientX - drag.startX) / drag.rect.width) * bounds.width;
-      const dy = ((moveEvent.clientY - drag.startY) / drag.rect.height) * bounds.height;
+      const dx = ((moveEvent.clientX - drag.startX) / drag.rect.width) * streamer.canvasWidth;
+      const dy = ((moveEvent.clientY - drag.startY) / drag.rect.height) * streamer.canvasHeight;
+      const thresholdX = (SNAP_DISTANCE_PX * streamer.canvasWidth) / drag.rect.width;
+      const thresholdY = (SNAP_DISTANCE_PX * streamer.canvasHeight) / drag.rect.height;
       if (drag.kind === "move") {
-        const next = applyMoveSnap(
-          {
-            x: drag.original.x + dx,
-            y: drag.original.y + dy,
-            width: drag.original.width,
-            height: drag.original.height
-          },
-          {
-            streamer,
-            elements,
-            activeId: drag.id,
-            threshold: (12 / drag.rect.width) * bounds.width,
-            disabled: moveEvent.shiftKey
-          }
-        );
-        latestPatch = {
-          x: Math.round(next.x),
-          y: Math.round(next.y)
+        const position = {
+          x: drag.original.x + dx,
+          y: drag.original.y + dy
         };
+        latestPatch =
+          drag.original.type === "TEXT" ||
+          moveEvent.altKey ||
+          moveEvent.ctrlKey ||
+          moveEvent.metaKey
+            ? position
+            : snapMoveToCanvasEdges(
+                { ...drag.original, ...position },
+                streamer.canvasWidth,
+                streamer.canvasHeight,
+                thresholdX,
+                thresholdY
+              );
       } else {
         const resized = resizeElement(drag.original, drag.handle ?? "se", dx, dy, moveEvent);
         latestPatch =
-          "props" in resized
+          drag.original.type === "TEXT" ||
+          moveEvent.altKey ||
+          moveEvent.shiftKey ||
+          moveEvent.ctrlKey ||
+          moveEvent.metaKey ||
+          resized.x === undefined ||
+          resized.y === undefined ||
+          resized.width === undefined ||
+          resized.height === undefined
             ? resized
-            : applyResizeSnap(resized, {
-                streamer,
-                threshold: (12 / drag.rect.width) * bounds.width,
-                disabled: moveEvent.altKey
-              });
+            : snapResizeToCanvasEdges(
+                { x: resized.x, y: resized.y, width: resized.width, height: resized.height },
+                drag.handle ?? "se",
+                streamer.canvasWidth,
+                streamer.canvasHeight,
+                thresholdX,
+                thresholdY
+              );
       }
       (onTransientUpdate ?? onUpdate)?.(drag.id, latestPatch);
     }
@@ -149,21 +279,28 @@ export function CanvasStage({
 
   return (
     <section className={`stage-shell stage-${mode}`}>
-      <div className="stage-scroll">
+      <div
+        className="stage-scroll"
+        ref={viewportRef}
+        onPointerDown={startPan}
+        onPointerMove={movePan}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
+      >
+        {mode === "workspace" && (
+          <div className="stage-zoom-indicator">{Math.round(scale * 100)}% · Ctrl + колесо</div>
+        )}
         <div
           className="stage-surface"
           data-stage-mode={mode}
-          style={{
-            aspectRatio: `${bounds.width} / ${bounds.height}`,
-            ...canvasStyle
-          }}
-          onPointerDown={() => {
-            if (mode === "workspace") {
+          style={surfaceStyle}
+          onPointerDown={(event) => {
+            if (mode === "workspace" && event.button === 0) {
               onSelect?.("");
             }
           }}
         >
-          {mode === "workspace" && <WorkspaceZones streamer={streamer} bounds={bounds} />}
+          {mode === "workspace" && <WorkspaceZones />}
           {sortElements(elements).map((element) => (
             <div
               key={element.id}
@@ -172,10 +309,10 @@ export function CanvasStage({
                 element.visible ? "" : "is-hidden"
               }`}
               style={{
-                left: `${((element.x - bounds.minX) / bounds.width) * 100}%`,
-                top: `${((element.y - bounds.minY) / bounds.height) * 100}%`,
-                width: `${(element.width / bounds.width) * 100}%`,
-                height: `${(element.height / bounds.height) * 100}%`,
+                left: `${(element.x / streamer.canvasWidth) * 100}%`,
+                top: `${(element.y / streamer.canvasHeight) * 100}%`,
+                width: `${(element.width / streamer.canvasWidth) * 100}%`,
+                height: `${(element.height / streamer.canvasHeight) * 100}%`,
                 opacity: element.opacity,
                 zIndex: element.zIndex + 1000,
                 transform: `rotate(${element.rotation}deg)`
@@ -204,198 +341,116 @@ export function CanvasStage({
   );
 }
 
-function getStageBounds(streamer: StreamerView, mode: CanvasStageProps["mode"]): StageBounds {
-  if (mode === "overlay") {
-    return {
-      minX: 0,
-      minY: 0,
-      width: streamer.canvasWidth,
-      height: streamer.canvasHeight,
-      liveLeft: 0,
-      liveTop: 0
-    };
-  }
+export function calculateFitScale(
+  viewportWidth: number,
+  viewportHeight: number,
+  canvasWidth: number,
+  canvasHeight: number
+): number {
+  if (viewportWidth <= 0 || viewportHeight <= 0) return 1;
+  const side = Math.max(540, Math.round(canvasWidth * 0.3));
+  const top = Math.max(170, Math.round(canvasHeight * 0.16));
+  const bottom = Math.max(390, Math.round(canvasHeight * 0.36));
+  return Math.min(
+    (viewportWidth - 48) / (canvasWidth + side + 100),
+    (viewportHeight - 48) / (canvasHeight + top + bottom),
+    1
+  );
+}
 
-  const side = Math.max(540, Math.round(streamer.canvasWidth * 0.3));
-  const top = Math.max(170, Math.round(streamer.canvasHeight * 0.16));
-  const bottom = Math.max(390, Math.round(streamer.canvasHeight * 0.36));
+export function calculateOverlayGeometry(
+  viewportWidth: number,
+  viewportHeight: number,
+  canvasWidth: number,
+  canvasHeight: number
+): { scale: number; left: number; top: number } {
+  if (viewportWidth <= 0 || viewportHeight <= 0 || canvasWidth <= 0 || canvasHeight <= 0) {
+    return { scale: 1, left: 0, top: 0 };
+  }
+  const scale = Math.min(viewportWidth / canvasWidth, viewportHeight / canvasHeight);
   return {
-    minX: -side,
-    minY: -top,
-    width: streamer.canvasWidth + side * 2,
-    height: streamer.canvasHeight + top + bottom,
-    liveLeft: side,
-    liveTop: top
+    scale,
+    left: (viewportWidth - canvasWidth * scale) / 2,
+    top: (viewportHeight - canvasHeight * scale) / 2
   };
 }
 
-function WorkspaceZones({ streamer, bounds }: { streamer: StreamerView; bounds: StageBounds }) {
-  const liveStyle: CSSProperties = {
-    left: `${(bounds.liveLeft / bounds.width) * 100}%`,
-    top: `${(bounds.liveTop / bounds.height) * 100}%`,
-    width: `${(streamer.canvasWidth / bounds.width) * 100}%`,
-    height: `${(streamer.canvasHeight / bounds.height) * 100}%`
-  };
-  const spawnStyle: CSSProperties = {
-    left: "0%",
-    top: `${(bounds.liveTop / bounds.height) * 100}%`,
-    width: `${(bounds.liveLeft / bounds.width) * 100}%`,
-    height: `${(streamer.canvasHeight / bounds.height) * 100}%`
-  };
-  const stageStyle: CSSProperties = {
-    left: `${(bounds.liveLeft / bounds.width) * 100}%`,
-    top: `${((bounds.liveTop + streamer.canvasHeight) / bounds.height) * 100}%`,
-    width: `${(streamer.canvasWidth / bounds.width) * 100}%`,
-    height: `${((bounds.height - bounds.liveTop - streamer.canvasHeight) / bounds.height) * 100}%`
-  };
+function nearestEdgeCorrection(
+  edgePositions: number[],
+  canvasSize: number,
+  threshold: number
+): number {
+  const corrections = edgePositions.flatMap((position) => [-position, canvasSize - position]);
+  const nearest = corrections.reduce(
+    (best, correction) => (Math.abs(correction) < Math.abs(best) ? correction : best),
+    Number.POSITIVE_INFINITY
+  );
+  return Math.abs(nearest) <= threshold ? nearest : 0;
+}
 
+export function snapMoveToCanvasEdges(
+  bounds: ElementBounds,
+  canvasWidth: number,
+  canvasHeight: number,
+  thresholdX: number,
+  thresholdY: number
+): Pick<ElementBounds, "x" | "y"> {
+  return {
+    x:
+      bounds.x +
+      nearestEdgeCorrection([bounds.x, bounds.x + bounds.width], canvasWidth, thresholdX),
+    y:
+      bounds.y +
+      nearestEdgeCorrection([bounds.y, bounds.y + bounds.height], canvasHeight, thresholdY)
+  };
+}
+
+export function snapResizeToCanvasEdges(
+  bounds: ElementBounds,
+  handle: ResizeHandle,
+  canvasWidth: number,
+  canvasHeight: number,
+  thresholdX: number,
+  thresholdY: number
+): ElementBounds {
+  let { x, y, width, height } = bounds;
+  if (handle.includes("e")) {
+    const correction = nearestEdgeCorrection([x + width], canvasWidth, thresholdX);
+    if (width + correction >= 8) width += correction;
+  } else if (handle.includes("w")) {
+    const correction = nearestEdgeCorrection([x], canvasWidth, thresholdX);
+    if (width - correction >= 8) {
+      x += correction;
+      width -= correction;
+    }
+  }
+  if (handle.includes("s")) {
+    const correction = nearestEdgeCorrection([y + height], canvasHeight, thresholdY);
+    if (height + correction >= 8) height += correction;
+  } else if (handle.includes("n")) {
+    const correction = nearestEdgeCorrection([y], canvasHeight, thresholdY);
+    if (height - correction >= 8) {
+      y += correction;
+      height -= correction;
+    }
+  }
+  return { x, y, width, height };
+}
+
+function WorkspaceZones() {
   return (
     <>
-      <div className="canvas-zone spawn-zone" style={spawnStyle}>
+      <div className="canvas-zone spawn-zone">
         <span>SPAWN</span>
       </div>
-      <div className="canvas-zone stage-zone" style={stageStyle}>
+      <div className="canvas-zone stage-zone">
         <span>STAGE</span>
       </div>
-      <div className="canvas-zone live-zone" style={liveStyle}>
-        <span>
-          OBS {streamer.canvasWidth}x{streamer.canvasHeight}
-        </span>
+      <div className="canvas-zone live-zone">
         <SafeGuides />
       </div>
     </>
   );
-}
-
-function applyMoveSnap(
-  rect: { x: number; y: number; width: number; height: number },
-  options: {
-    streamer: StreamerView;
-    elements: OverlayElement[];
-    activeId: string;
-    threshold: number;
-    disabled: boolean;
-  }
-): { x: number; y: number } {
-  if (options.disabled) {
-    return { x: rect.x, y: rect.y };
-  }
-  const xTargets = [0, options.streamer.canvasWidth / 2, options.streamer.canvasWidth];
-  const yTargets = [0, options.streamer.canvasHeight / 2, options.streamer.canvasHeight];
-  for (const element of options.elements) {
-    if (element.id === options.activeId || !element.visible) {
-      continue;
-    }
-    xTargets.push(element.x, element.x + element.width / 2, element.x + element.width);
-    yTargets.push(element.y, element.y + element.height / 2, element.y + element.height);
-  }
-
-  let x = rect.x;
-  let y = rect.y;
-  const horizontal = [
-    { edge: rect.x, apply: (target: number) => target },
-    { edge: rect.x + rect.width / 2, apply: (target: number) => target - rect.width / 2 },
-    { edge: rect.x + rect.width, apply: (target: number) => target - rect.width }
-  ];
-  const vertical = [
-    { edge: rect.y, apply: (target: number) => target },
-    { edge: rect.y + rect.height / 2, apply: (target: number) => target - rect.height / 2 },
-    { edge: rect.y + rect.height, apply: (target: number) => target - rect.height }
-  ];
-  const snapX = findSnap(horizontal, xTargets, options.threshold);
-  const snapY = findSnap(vertical, yTargets, options.threshold);
-  if (snapX !== null) {
-    x = snapX;
-  }
-  if (snapY !== null) {
-    y = snapY;
-  }
-  return { x, y };
-}
-
-function applyResizeSnap(
-  patch: Partial<OverlayElement>,
-  options: { streamer: StreamerView; threshold: number; disabled: boolean }
-): Partial<OverlayElement> {
-  if (
-    options.disabled ||
-    patch.x === undefined ||
-    patch.y === undefined ||
-    patch.width === undefined ||
-    patch.height === undefined
-  ) {
-    return patch;
-  }
-
-  let x = patch.x;
-  let y = patch.y;
-  let width = patch.width;
-  let height = patch.height;
-  const minSize = 8;
-  const right = x + width;
-  const bottom = y + height;
-  const xTargets = [0, options.streamer.canvasWidth / 2, options.streamer.canvasWidth];
-  const yTargets = [0, options.streamer.canvasHeight / 2, options.streamer.canvasHeight];
-
-  const leftSnap = closestTarget(x, xTargets, options.threshold);
-  const rightSnap = closestTarget(right, xTargets, options.threshold);
-  const centerSnap = closestTarget(x + width / 2, xTargets, options.threshold);
-  if (leftSnap !== null) {
-    width = Math.max(minSize, right - leftSnap);
-    x = leftSnap;
-  } else if (rightSnap !== null) {
-    width = Math.max(minSize, rightSnap - x);
-  } else if (centerSnap !== null) {
-    x = centerSnap - width / 2;
-  }
-
-  const topSnap = closestTarget(y, yTargets, options.threshold);
-  const bottomSnap = closestTarget(bottom, yTargets, options.threshold);
-  const middleSnap = closestTarget(y + height / 2, yTargets, options.threshold);
-  if (topSnap !== null) {
-    height = Math.max(minSize, bottom - topSnap);
-    y = topSnap;
-  } else if (bottomSnap !== null) {
-    height = Math.max(minSize, bottomSnap - y);
-  } else if (middleSnap !== null) {
-    y = middleSnap - height / 2;
-  }
-
-  return {
-    ...patch,
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height)
-  };
-}
-
-function findSnap(
-  edges: Array<{ edge: number; apply: (target: number) => number }>,
-  targets: number[],
-  threshold: number
-): number | null {
-  let best: { distance: number; value: number } | null = null;
-  for (const edge of edges) {
-    for (const target of targets) {
-      const distance = Math.abs(edge.edge - target);
-      if (distance <= threshold && (!best || distance < best.distance)) {
-        best = { distance, value: edge.apply(target) };
-      }
-    }
-  }
-  return best?.value ?? null;
-}
-
-function closestTarget(value: number, targets: number[], threshold: number): number | null {
-  let best: { distance: number; target: number } | null = null;
-  for (const target of targets) {
-    const distance = Math.abs(value - target);
-    if (distance <= threshold && (!best || distance < best.distance)) {
-      best = { distance, target };
-    }
-  }
-  return best?.target ?? null;
 }
 
 function ResizeHandles({
@@ -419,19 +474,19 @@ function ResizeHandles({
   );
 }
 
-function resizeElement(
+export function resizeElement(
   original: OverlayElement,
   handle: ResizeHandle,
   dx: number,
   dy: number,
-  event: PointerEvent
+  event: Pick<PointerEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">
 ): Partial<OverlayElement> {
   if (event.altKey) {
     return { props: applyCrop(original, handle, dx, dy) };
   }
 
   const fromCenter = event.ctrlKey || event.metaKey;
-  const preserveAspect = !event.shiftKey && handle.length === 2;
+  const preserveAspect = event.shiftKey && handle.length === 2;
   const minSize = 8;
   const centerX = original.x + original.width / 2;
   const centerY = original.y + original.height / 2;
@@ -477,10 +532,10 @@ function resizeElement(
   }
 
   return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height)
+    x,
+    y,
+    width,
+    height
   };
 }
 

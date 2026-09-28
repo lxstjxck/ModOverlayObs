@@ -684,7 +684,7 @@ input[type="color"] {
 }
 
 .media-element {
-  object-fit: contain;
+  object-fit: fill;
   display: block;
   pointer-events: none;
 }

@@ -47,7 +47,9 @@ export const previewAddSchema = z
     type: z.enum(["TEXT"]).optional(),
     text: z.string().max(4000).optional(),
     x: z.number().finite().optional(),
-    y: z.number().finite().optional()
+    y: z.number().finite().optional(),
+    width: z.number().int().min(1).max(10000).optional(),
+    height: z.number().int().min(1).max(10000).optional()
   })
   .strict()
   .refine(
@@ -58,7 +60,10 @@ export const previewAddSchema = z
     {
       message: "mediaId, emote, or text type is required"
     }
-  );
+  )
+  .refine((value) => (value.width === undefined) === (value.height === undefined), {
+    message: "width and height must be provided together"
+  });
 
 export const twitchChannelSchema = z
   .object({

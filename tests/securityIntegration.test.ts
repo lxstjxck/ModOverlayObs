@@ -125,6 +125,25 @@ function upload(token = "owner-session", bytes = png, filename = "test.png") {
   return fetch(`${baseUrl}/api/media`, { method: "POST", headers: headers(token), body: data });
 }
 
+it("uses validated intrinsic dimensions for a new preview without changing live state", async () => {
+  const uploaded = await upload();
+  expect(uploaded.status).toBe(201);
+  const { media } = (await uploaded.json()) as { media: { id: string } };
+  const socket = await socketClient({ session: "owner-session" });
+  const state = event<Array<{ mediaId: string; width: number; height: number; x: number }>>(
+    socket,
+    "preview:state"
+  );
+  socket.emit("preview:add", { mediaId: media.id, width: 640, height: 480 });
+  expect((await state)[0]).toMatchObject({
+    mediaId: media.id,
+    width: 640,
+    height: 480,
+    x: -696
+  });
+  expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
+});
+
 async function files() {
   const entries = await fs.readdir(config.uploadDir);
   const temporary = await fs.readdir(path.join(config.uploadDir, ".tmp"));

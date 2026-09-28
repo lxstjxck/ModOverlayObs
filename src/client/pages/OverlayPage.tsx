@@ -149,12 +149,7 @@ export function OverlayPage({ token }: { token: string }) {
 
   return (
     <main className="overlay-page">
-      <CanvasStage
-        mode="overlay"
-        streamer={defaultStreamer}
-        elements={displayElements}
-        zoom="fit"
-      />
+      <CanvasStage mode="overlay" streamer={defaultStreamer} elements={displayElements} />
     </main>
   );
 }

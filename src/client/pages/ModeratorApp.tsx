@@ -1,11 +1,4 @@
-import {
-  AlertTriangle,
-  ClipboardList,
-  LogOut,
-  Monitor,
-  RefreshCw,
-  ShieldCheck
-} from "lucide-react";
+import { AlertTriangle, ClipboardList, LogOut, Monitor, RefreshCw, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type {
@@ -22,13 +15,13 @@ import type {
 import { api, ApiError } from "../api";
 import { appVersion } from "../appVersion";
 import { CanvasStage } from "../components/CanvasStage";
+import { BrandMark } from "../components/BrandMark";
 import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
 import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { reconcilePreview } from "../previewSync";
-
-type ZoomValue = "fit" | 0.25 | 0.5 | 0.75 | 1;
+import { readMediaDimensions } from "../mediaDimensions";
 
 interface MeResponse {
   user: UserView;
@@ -51,8 +44,9 @@ export function ModeratorApp() {
     moderators: []
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [zoom, setZoom] = useState<ZoomValue>("fit");
   const [error, setError] = useState("");
+  const [mediaDeleteIds, setMediaDeleteIds] = useState<string[]>([]);
+  const [deletingMedia, setDeletingMedia] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const pendingPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const inFlightPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
@@ -179,7 +173,7 @@ export function ModeratorApp() {
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (
-        target?.closest("input, textarea, select, [contenteditable=true]") ||
+        target?.closest("input, textarea, select, [contenteditable=true], [role=dialog]") ||
         (event.key !== "Delete" && event.key !== "Backspace") ||
         !selectedId
       ) {
@@ -193,6 +187,15 @@ export function ModeratorApp() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedId]);
+
+  useEffect(() => {
+    if (mediaDeleteIds.length === 0) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !deletingMedia) setMediaDeleteIds([]);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mediaDeleteIds.length, deletingMedia]);
 
   if (!user || !streamer) {
     return (
@@ -208,6 +211,15 @@ export function ModeratorApp() {
     setMedia(mediaResult.media);
   }
 
+  async function addMediaToCanvas(item: MediaItem) {
+    try {
+      const dimensions = await readMediaDimensions(item);
+      emit("preview:add", { mediaId: item.id, ...dimensions });
+    } catch (sizeError) {
+      setError(sizeError instanceof Error ? sizeError.message : "Could not read media dimensions");
+    }
+  }
+
   async function uploadFiles(files: FileList | File[], addToCanvas = false) {
     setError("");
     for (const file of Array.from(files)) {
@@ -220,7 +232,7 @@ export function ModeratorApp() {
         });
         setMedia((items) => [result.media, ...items]);
         if (addToCanvas) {
-          emit("preview:add", { mediaId: result.media.id });
+          await addMediaToCanvas(result.media);
         }
       } catch (uploadError) {
         setError(uploadError instanceof Error ? uploadError.message : "Upload failed");
@@ -228,7 +240,11 @@ export function ModeratorApp() {
     }
   }
 
-  async function addMediaUrl(payload: { url: string; type: MediaType; name?: string }) {
+  async function addMediaUrl(payload: {
+    url: string;
+    type: MediaType;
+    name?: string;
+  }): Promise<boolean> {
     setError("");
     try {
       const result = await api<{ media: MediaItem }>("/api/media/url", {
@@ -236,9 +252,11 @@ export function ModeratorApp() {
         body: JSON.stringify(payload)
       });
       setMedia((items) => [result.media, ...items]);
-      emit("preview:add", { mediaId: result.media.id });
+      await addMediaToCanvas(result.media);
+      return true;
     } catch (urlError) {
       setError(urlError instanceof Error ? urlError.message : "Could not add media URL");
+      return false;
     }
   }
 
@@ -360,12 +378,27 @@ export function ModeratorApp() {
     previewPatchTimers.current.set(id, timer);
   }
 
-  async function deleteMedia(mediaId: string) {
-    if (!window.confirm("Delete this media file?")) {
-      return;
+  async function deleteMedia() {
+    if (deletingMedia || mediaDeleteIds.length === 0) return;
+    setDeletingMedia(true);
+    setError("");
+    const remaining = [...mediaDeleteIds];
+    try {
+      for (const id of mediaDeleteIds) {
+        await api(`/api/media/${encodeURIComponent(id)}`, { method: "DELETE" });
+        remaining.shift();
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Could not delete media");
+    } finally {
+      setMediaDeleteIds(remaining);
+      try {
+        await refreshMedia();
+      } catch (refreshError) {
+        setError(refreshError instanceof Error ? refreshError.message : "Could not refresh media");
+      }
+      setDeletingMedia(false);
     }
-    await api(`/api/media/${mediaId}`, { method: "DELETE" });
-    await refreshMedia();
   }
 
   async function logout() {
@@ -386,41 +419,56 @@ export function ModeratorApp() {
     >
       <header className="topbar">
         <div className="topbar-brand">
-          <ShieldCheck size={20} />
-          <strong>Moderator Overlay</strong>
-          <span className="app-version">Version {appVersion}</span>
+          <span className="brand-symbol">
+            <BrandMark />
+          </span>
+          <span className="brand-copy">
+            <strong>
+              MODERATOR <span>OVERLAY</span>
+            </strong>
+            <small>
+              Broadcast Console <span aria-hidden="true">/</span> v{appVersion}
+            </small>
+          </span>
         </div>
-        <div className={`presence ${presence.overlayConnected ? "online" : "offline"}`}>
-          <Monitor size={16} />
-          OBS {presence.overlayConnected ? "ONLINE" : "OFFLINE"}
-        </div>
-        <div className="presence">
-          Mods: {presence.moderators.length}
-          {presence.moderators.length > 0 && (
-            <span className="moderator-names">
-              {presence.moderators.map((moderator) => moderator.displayName).join(", ")}
+        <div className="topbar-status">
+          <div
+            className={`presence obs-presence ${presence.overlayConnected ? "online" : "offline"}`}
+          >
+            <span className="status-light" aria-hidden="true" />
+            <span className="presence-copy">
+              <strong>OBS {presence.overlayConnected ? "ONLINE" : "OFFLINE"}</strong>
             </span>
-          )}
+          </div>
+          <div
+            className="presence account-presence"
+            aria-label={`Текущая учетная запись: ${user.username}`}
+          >
+            <UserRound size={16} aria-hidden="true" />
+            <span className="presence-copy">
+              <strong className="account-name">{user.username}</strong>
+            </span>
+          </div>
         </div>
-        <div className="segmented">
-          {(["fit", 0.25, 0.5, 0.75, 1] as const).map((item) => (
-            <button
-              type="button"
-              className={zoom === item ? "active" : ""}
-              key={item}
-              onClick={() => setZoom(item)}
-            >
-              {item === "fit" ? "FIT" : `${item * 100}%`}
-            </button>
-          ))}
+        <div className="topbar-tools">
+          <button
+            className="setup-link"
+            type="button"
+            onClick={() => (window.location.href = "/obs-setup")}
+          >
+            <ClipboardList size={16} />
+            OBS Setup
+          </button>
+          <button
+            className="logout-button"
+            type="button"
+            title="Sign out"
+            aria-label="Sign out"
+            onClick={() => void logout()}
+          >
+            <LogOut size={16} />
+          </button>
         </div>
-        <button type="button" onClick={() => (window.location.href = "/obs-setup")}>
-          <ClipboardList size={16} />
-          OBS Setup
-        </button>
-        <button type="button" onClick={() => void logout()}>
-          <LogOut size={16} />
-        </button>
       </header>
 
       {error && (
@@ -435,6 +483,9 @@ export function ModeratorApp() {
 
       <div className="workspace">
         <div className="asset-sidebar">
+          <div className="sidebar-heading">
+            <span>01</span> SOURCE LIBRARY
+          </div>
           <div className="asset-tabs">
             <button
               type="button"
@@ -455,9 +506,12 @@ export function ModeratorApp() {
             <MediaLibrary
               media={media}
               onUpload={(files) => void uploadFiles(files)}
-              onAdd={(mediaId) => emit("preview:add", { mediaId })}
-              onAddUrl={(payload) => void addMediaUrl(payload)}
-              onDelete={(mediaId) => void deleteMedia(mediaId)}
+              onAdd={(mediaId) => {
+                const item = media.find((entry) => entry.id === mediaId);
+                if (item) void addMediaToCanvas(item);
+              }}
+              onAddUrl={addMediaUrl}
+              onDelete={setMediaDeleteIds}
               onAddText={() => emit("preview:add", { type: "TEXT", text: "New text" })}
               canDelete={permissions?.canDeleteMedia ?? false}
             />
@@ -475,16 +529,37 @@ export function ModeratorApp() {
           )}
         </div>
 
-        <CanvasStage
-          mode="workspace"
-          streamer={streamer}
-          elements={preview}
-          selectedId={selectedId}
-          zoom={zoom}
-          onSelect={(id) => setSelectedId(id || null)}
-          onTransientUpdate={canEditCanvas ? updateTransformLocal : undefined}
-          onCommitUpdate={canEditCanvas ? commitTransform : undefined}
-        />
+        <section className="workspace-center" aria-label="Canvas workspace">
+          <div className="workspace-heading">
+            <div>
+              <span className="section-index">02 / COMPOSITION</span>
+              <h1>Canvas workspace</h1>
+            </div>
+            <span className="canvas-resolution">
+              <Monitor size={14} /> OBS {streamer.canvasWidth} × {streamer.canvasHeight}
+            </span>
+          </div>
+          <CanvasStage
+            mode="workspace"
+            streamer={streamer}
+            elements={preview}
+            selectedId={selectedId}
+            onSelect={(id) => setSelectedId(id || null)}
+            onTransientUpdate={canEditCanvas ? updateTransformLocal : undefined}
+            onCommitUpdate={canEditCanvas ? commitTransform : undefined}
+          />
+          <div className="workspace-caption">
+            <span>
+              <i className="caption-key live" /> RED FRAME · OBS OUTPUT
+            </span>
+            <span>
+              <i className="caption-key spawn" /> SPAWN · STAGING
+            </span>
+            <span className="workspace-caption-note">
+              Ctrl + колесо — масштаб · тяните фон — обзор
+            </span>
+          </div>
+        </section>
 
         <PropertiesPanel
           selected={selected}
@@ -496,7 +571,9 @@ export function ModeratorApp() {
 
       <footer className="bottom-panels single-panel">
         <details>
-          <summary>Объекты на полотне ({preview.length})</summary>
+          <summary>
+            LAYERS <span>{preview.length.toString().padStart(2, "0")}</span>
+          </summary>
           <LayersPanel
             title="Canvas Assets"
             elements={preview}
@@ -505,7 +582,65 @@ export function ModeratorApp() {
             onToggle={(id, visible) => patchPreviewLocal(id, { visible })}
           />
         </details>
+        <div className="footer-credit">
+          Made by <strong>lxstjxck</strong>
+        </div>
       </footer>
+      {mediaDeleteIds.length > 0 && (
+        <div
+          className="media-delete-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !deletingMedia) setMediaDeleteIds([]);
+          }}
+        >
+          <div
+            className="media-delete-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="media-delete-title"
+            onKeyDown={(event) => {
+              if (event.key !== "Tab") return;
+              const buttons = Array.from(
+                event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")
+              );
+              const first = buttons[0];
+              const last = buttons[buttons.length - 1];
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last?.focus();
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first?.focus();
+              }
+            }}
+          >
+            <h2 id="media-delete-title">Удалить медиа?</h2>
+            <p>
+              Выбрано: {mediaDeleteIds.length}. Файлы будут удалены из библиотеки; если они уже
+              используются на полотне или в OBS, воспроизведение прекратится. Это действие нельзя
+              отменить.
+            </p>
+            <div className="media-delete-actions">
+              <button
+                type="button"
+                autoFocus
+                disabled={deletingMedia}
+                onClick={() => setMediaDeleteIds([])}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="danger"
+                disabled={deletingMedia}
+                onClick={() => void deleteMedia()}
+              >
+                {deletingMedia ? "Удаление…" : `Удалить ${mediaDeleteIds.length}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -2,6 +2,7 @@ import { Copy, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ObsSetupView } from "../../shared/types";
 import { api } from "../api";
+import { BrandMark } from "../components/BrandMark";
 
 export function ObsSetupPage() {
   const [setup, setSetup] = useState<ObsSetupView | null>(null);
@@ -29,6 +30,10 @@ export function ObsSetupPage() {
   return (
     <main className="setup-page">
       <section className="setup-panel">
+        <div className="brand-mark">
+          <BrandMark />
+        </div>
+        <p className="setup-eyebrow">BROADCAST CONSOLE / OUTPUT CONFIGURATION</p>
         <h1>OBS Setup</h1>
         {error && <div className="error-box">{error}</div>}
         {setup && (
@@ -37,7 +42,10 @@ export function ObsSetupPage() {
               Overlay URL
               <div className="copy-row">
                 <input value={setup.overlayUrl} readOnly />
-                <button type="button" onClick={() => void navigator.clipboard.writeText(setup.overlayUrl)}>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(setup.overlayUrl)}
+                >
                   <Copy size={16} />
                   Copy
                 </button>
@@ -52,7 +60,9 @@ export function ObsSetupPage() {
               </li>
               <li>Leave Custom CSS empty.</li>
               <li>Right-click the Browser Source, open Transform, then choose Reset Transform.</li>
-              <li>Right-click the Browser Source again, open Transform, then choose Fit to Screen.</li>
+              <li>
+                Right-click the Browser Source again, open Transform, then choose Fit to Screen.
+              </li>
               <li>Place the Browser Source above the game or capture source.</li>
             </ol>
             <div className="action-row">
@@ -66,6 +76,9 @@ export function ObsSetupPage() {
             </div>
           </>
         )}
+        <p className="page-credit">
+          Made by <strong>lxstjxck</strong>
+        </p>
       </section>
     </main>
   );

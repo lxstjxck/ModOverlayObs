@@ -2,6 +2,7 @@ import { LogIn } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { api } from "../api";
 import { appVersion } from "../appVersion";
+import { BrandMark } from "../components/BrandMark";
 
 export function LoginPage() {
   const [username, setUsername] = useState("owner");
@@ -29,9 +30,12 @@ export function LoginPage() {
   return (
     <main className="login-page">
       <form className="login-form" onSubmit={handleSubmit}>
-        <div className="brand-mark">MO</div>
+        <div className="brand-mark">
+          <BrandMark />
+        </div>
+        <p className="login-eyebrow">BROADCAST CONTROL / ACCESS</p>
         <h1>Moderator Overlay</h1>
-        <p className="app-version">Version {appVersion}</p>
+        <p className="app-version">Console v{appVersion}</p>
         <label className="field">
           Username
           <input value={username} onChange={(event) => setUsername(event.target.value)} autoFocus />
@@ -49,6 +53,9 @@ export function LoginPage() {
           <LogIn size={16} />
           {loading ? "Signing in" : "Sign in"}
         </button>
+        <p className="page-credit">
+          Made by <strong>lxstjxck</strong>
+        </p>
       </form>
     </main>
   );
