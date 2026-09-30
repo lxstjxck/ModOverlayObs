@@ -12,6 +12,7 @@ import { config } from "./config";
 import { prisma } from "./db";
 import { getDefaultStreamer, writeAudit } from "./state";
 import { moderatorTtsText, redemptionTtsText, type TwitchChatMessage } from "./ttsPolicy";
+import { cleanupStaleTtsFiles } from "./ttsFiles";
 
 type StoredTwitch = {
   accessToken: string;
@@ -38,6 +39,7 @@ let reconnectTimer: NodeJS.Timeout | null = null;
 let io: Server | null = null;
 let stopping = false;
 let refreshPromise: Promise<{ token: string; settings: StoredTwitch }> | null = null;
+let cleanupTimer: NodeJS.Timeout | null = null;
 const costSchema = z.object({ cost: z.number().int().min(1).max(1_000_000) });
 
 function callbackUrl(): string {
@@ -363,11 +365,17 @@ export function ttsRouter(): express.Router {
 export function startTts(server: Server): void {
   io = server;
   stopping = false;
+  cleanupTimer = setInterval(() => {
+    void cleanupStaleTtsFiles().catch(() => console.warn("TTS temporary cleanup failed"));
+  }, 5 * 60_000);
+  cleanupTimer.unref();
   restartTwitch();
 }
 
 export function stopTts(): void {
   stopping = true;
+  if (cleanupTimer) clearInterval(cleanupTimer);
+  cleanupTimer = null;
   subscribed = false;
   pendingSocket?.close();
   pendingSocket = null;

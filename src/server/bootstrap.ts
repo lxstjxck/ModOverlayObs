@@ -6,11 +6,13 @@ import path from "node:path";
 import { config } from "./config";
 import { prisma } from "./db";
 import { defaultPermissionsByRole } from "../shared/types";
+import { cleanupStaleTtsFiles } from "./ttsFiles";
 
 export async function ensureRuntimeState(): Promise<void> {
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(path.resolve(config.projectRoot, "database"), { recursive: true });
   await fs.mkdir(path.join(config.uploadDir, ".tmp"), { recursive: true });
+  await cleanupStaleTtsFiles();
 
   await prisma.session.deleteMany({
     where: { expiresAt: { lt: new Date() } }
