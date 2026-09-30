@@ -244,6 +244,62 @@ afterAll(async () => {
   await fs.rm(fixture.root, { recursive: true, force: true });
 });
 
+it("resolves an eblo.id post server-side and checks the resolved media permission", async () => {
+  await prisma.user.update({
+    where: { id: moderatorId },
+    data: {
+      permissionsJson: JSON.stringify({
+        canUploadImage: false,
+        canUploadGif: false,
+        canUploadVideo: false,
+        canUploadAudio: false
+      })
+    }
+  });
+  const originalFetch = globalThis.fetch;
+  const externalFetch = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    if (String(input) === "https://eblo.id/XRbi1j2") {
+      return Promise.resolve(
+        new Response(
+          '<body data-media-type="image"><img id="preview-image" src="/uploads/XRbi1j2/photo.webp"></body>',
+          { headers: { "content-type": "text/html" } }
+        )
+      );
+    }
+    return originalFetch(input, init);
+  });
+  const post = (token: string) =>
+    originalFetch(`${baseUrl}/api/media/url`, {
+      method: "POST",
+      headers: { ...headers(token), "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://eblo.id/XRbi1j2" })
+    });
+
+  const denied = await post("mod-session");
+  expect(denied.status).toBe(403);
+  expect(externalFetch).not.toHaveBeenCalled();
+
+  await prisma.user.update({
+    where: { id: moderatorId },
+    data: { permissionsJson: JSON.stringify({ canUploadImage: false, canUploadVideo: true }) }
+  });
+  const wrongTypePermission = await post("mod-session");
+  expect(wrongTypePermission.status).toBe(403);
+  expect(await prisma.media.count()).toBe(0);
+
+  const added = await post("owner-session");
+  expect(added.status).toBe(201);
+  const result = (await added.json()) as { media: { url: string; type: string } };
+  expect(result.media).toMatchObject({
+    url: "https://eblo.id/uploads/XRbi1j2/photo.webp",
+    type: "IMAGE"
+  });
+  expect(externalFetch).toHaveBeenCalledWith(
+    "https://eblo.id/XRbi1j2",
+    expect.objectContaining({ redirect: "manual" })
+  );
+});
+
 describe("realtime access revocation", () => {
   it("isolates Twitch and 7TV failures while keeping custom emotes", async () => {
     const streamer = await prisma.streamer.update({
@@ -301,7 +357,7 @@ describe("realtime access revocation", () => {
     });
     config.twitchClientId = "test-client";
     config.twitchClientSecret = "test-secret";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const providerFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url.includes("oauth2/token"))
         return new Response(JSON.stringify({ access_token: "test-token", expires_in: 3600 }), {
@@ -330,6 +386,14 @@ describe("realtime access revocation", () => {
     expect(result.twitch).toMatchObject([{ name: "Wave", animated: true }]);
     expect(result.sevenTv).toEqual([]);
     expect(result.errors.sevenTv).toBeTruthy();
+    await getChannelEmotes(streamer);
+    expect(
+      providerFetch.mock.calls.filter(([input]) => String(input).includes("/helix/chat/emotes?"))
+    ).toHaveLength(1);
+    await getChannelEmotes(streamer, true);
+    expect(
+      providerFetch.mock.calls.filter(([input]) => String(input).includes("/helix/chat/emotes?"))
+    ).toHaveLength(2);
     config.twitchClientId = "";
     config.twitchClientSecret = "";
   });

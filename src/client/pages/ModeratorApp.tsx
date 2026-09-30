@@ -37,6 +37,7 @@ export function ModeratorApp() {
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
+  const [emotesOpened, setEmotesOpened] = useState(false);
   const [preview, setPreview] = useState<OverlayElement[]>([]);
   const [presence, setPresence] = useState<PresenceState>({
     overlayConnected: false,
@@ -242,7 +243,7 @@ export function ModeratorApp() {
 
   async function addMediaUrl(payload: {
     url: string;
-    type: MediaType;
+    type?: MediaType;
     name?: string;
   }): Promise<boolean> {
     setError("");
@@ -497,12 +498,15 @@ export function ModeratorApp() {
             <button
               type="button"
               className={assetTab === "emotes" ? "active" : ""}
-              onClick={() => setAssetTab("emotes")}
+              onClick={() => {
+                setEmotesOpened(true);
+                setAssetTab("emotes");
+              }}
             >
               EMOTES
             </button>
           </div>
-          {assetTab === "media" ? (
+          <div className="asset-tab-content" hidden={assetTab !== "media"}>
             <MediaLibrary
               media={media}
               onUpload={(files) => void uploadFiles(files)}
@@ -515,17 +519,20 @@ export function ModeratorApp() {
               onAddText={() => emit("preview:add", { type: "TEXT", text: "New text" })}
               canDelete={permissions?.canDeleteMedia ?? false}
             />
-          ) : (
-            <EmotesPanel
-              streamer={streamer}
-              onStreamerChange={setStreamer}
-              onAdd={(emote: ChannelEmote) =>
-                emit("preview:add", { emoteId: emote.id, emoteProvider: emote.provider })
-              }
-              canConfigure={permissions?.canEditPreview ?? false}
-              canCreate={permissions?.canUploadImage ?? false}
-              canDelete={permissions?.canDeleteMedia ?? false}
-            />
+          </div>
+          {emotesOpened && (
+            <div className="asset-tab-content" hidden={assetTab !== "emotes"}>
+              <EmotesPanel
+                streamer={streamer}
+                onStreamerChange={setStreamer}
+                onAdd={(emote: ChannelEmote) =>
+                  emit("preview:add", { emoteId: emote.id, emoteProvider: emote.provider })
+                }
+                canConfigure={permissions?.canEditPreview ?? false}
+                canCreate={permissions?.canUploadImage ?? false}
+                canDelete={permissions?.canDeleteMedia ?? false}
+              />
+            </div>
           )}
         </div>
 

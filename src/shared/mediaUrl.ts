@@ -41,6 +41,24 @@ export function detectMediaTypeFromUrl(value: string): MediaType | null {
   }
 }
 
+export function getEbloPostId(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      !["eblo.id", "www.eblo.id"].includes(url.hostname.toLowerCase()) ||
+      url.port ||
+      url.username ||
+      url.password
+    )
+      return null;
+    const match = /^\/([a-zA-Z0-9]{7})\/?$/.exec(url.pathname);
+    return match?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function getYouTubeVideoId(value: string | null | undefined): string | null {
   if (!value) {
     return null;

@@ -330,8 +330,17 @@ input[type="color"] {
 .asset-tabs button.active {
   background: #255b58;
 }
-.asset-sidebar > .media-library,
-.asset-sidebar > .emotes-panel {
+.asset-sidebar > .asset-tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.asset-sidebar > .asset-tab-content[hidden] {
+  display: none;
+}
+.asset-tab-content > .media-library,
+.asset-tab-content > .emotes-panel {
   flex: 1;
   min-height: 0;
 }

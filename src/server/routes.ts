@@ -20,6 +20,8 @@ import {
   type AuthenticatedRequest
 } from "./auth";
 import { config } from "./config";
+import { resolveEbloMedia } from "./ebloMedia";
+import { getEbloPostId } from "../shared/mediaUrl";
 import { clearEmoteCache, createCustomEmote, getChannelEmotes } from "./emotes";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
@@ -113,9 +115,9 @@ export function createAppRouter(): express.Router {
     response.json({ media: await listMedia(streamer.id) });
   });
 
-  router.get("/emotes", requireAuth, async (_request, response) => {
+  router.get("/emotes", requireAuth, async (request, response) => {
     const streamer = await getDefaultStreamer();
-    response.json(await getChannelEmotes(streamer));
+    response.json(await getChannelEmotes(streamer, request.query.refresh === "1"));
   });
 
   router.patch(
@@ -220,6 +222,38 @@ export function createAppRouter(): express.Router {
     }
 
     const user = (request as AuthenticatedRequest).user;
+    const permissions = toUserView(user).permissions;
+    const ebloPostId = getEbloPostId(parsed.data.url);
+    if (
+      ebloPostId &&
+      !(
+        permissions.canUploadImage ||
+        permissions.canUploadGif ||
+        permissions.canUploadVideo ||
+        permissions.canUploadAudio
+      )
+    ) {
+      response.status(403).json({ error: "Permission denied" });
+      return;
+    }
+    let resolved: Awaited<ReturnType<typeof resolveEbloMedia>> = null;
+    if (ebloPostId) {
+      try {
+        resolved = await resolveEbloMedia(parsed.data.url);
+      } catch {
+        response.status(502).json({ error: "Could not load eblo.id media" });
+        return;
+      }
+      if (!resolved) {
+        response.status(422).json({ error: "This eblo.id post has no supported media" });
+        return;
+      }
+    }
+    const mediaType = resolved?.type ?? parsed.data.type;
+    if (!mediaType) {
+      response.status(400).json({ error: "Invalid media type" });
+      return;
+    }
     const permission = (
       {
         IMAGE: "canUploadImage",
@@ -227,42 +261,42 @@ export function createAppRouter(): express.Router {
         VIDEO: "canUploadVideo",
         AUDIO: "canUploadAudio"
       } as const
-    )[parsed.data.type];
-    if (!toUserView(user).permissions[permission]) {
+    )[mediaType];
+    if (!permissions[permission]) {
       response.status(403).json({ error: "Permission denied" });
       return;
     }
 
     const streamer = await getDefaultStreamer();
-    const mediaUrl = new URL(parsed.data.url);
+    const mediaUrl = new URL(resolved?.url ?? parsed.data.url);
     const fallbackName = decodeURIComponent(
       mediaUrl.pathname.split("/").filter(Boolean).pop() ?? ""
     );
     const originalName =
       parsed.data.name?.trim() ||
       fallbackName ||
-      (parsed.data.type === "AUDIO" ? "Remote audio" : "Remote video");
+      (mediaType === "AUDIO" ? "Remote audio" : "Remote video");
     const media = await prisma.media.create({
       data: {
         streamerId: streamer.id,
         filename: `remote-${crypto.randomUUID()}`,
         originalName,
         mimeType:
-          parsed.data.type === "IMAGE" || parsed.data.type === "GIF"
+          mediaType === "IMAGE" || mediaType === "GIF"
             ? "image/remote"
-            : parsed.data.type === "AUDIO"
+            : mediaType === "AUDIO"
               ? "audio/remote"
               : "video/remote",
-        type: parsed.data.type,
+        type: mediaType,
         size: 0,
-        url: parsed.data.url,
+        url: mediaUrl.href,
         uploadedById: user.id
       },
       include: { uploadedBy: true }
     });
 
     await writeAudit(streamer.id, user.id, "media.url_added", {
-      type: parsed.data.type,
+      type: mediaType,
       urlHost: mediaUrl.host,
       mediaId: media.id
     });

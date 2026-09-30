@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildYouTubeEmbedUrl,
   detectMediaTypeFromUrl,
+  getEbloPostId,
   getYouTubeVideoId
 } from "../src/shared/mediaUrl";
 import { mediaUrlSchema } from "../src/shared/validation";
@@ -19,6 +20,22 @@ describe("remote media validation", () => {
 });
 
 describe("media url helpers", () => {
+  it("recognizes eblo.id post links without accepting lookalike hosts", () => {
+    expect(getEbloPostId("https://eblo.id/XRbi1j2?share=1")).toBe("XRbi1j2");
+    expect(getEbloPostId("https://www.eblo.id/XRbi1j2")).toBe("XRbi1j2");
+    for (const url of [
+      "https://eblo.id.evil.test/XRbi1j2",
+      "http://eblo.id/XRbi1j2",
+      "https://eblo.id/@user",
+      "https://eblo.id/XRbi1j2/other"
+    ])
+      expect(getEbloPostId(url)).toBeNull();
+  });
+
+  it("accepts a post without a declared media type only for eblo.id", () => {
+    expect(mediaUrlSchema.safeParse({ url: "https://eblo.id/XRbi1j2" }).success).toBe(true);
+    expect(mediaUrlSchema.safeParse({ url: "https://example.com/file.mp4" }).success).toBe(false);
+  });
   it.each([
     ["https://cdn.example.com/image.PNG?size=large", "IMAGE"],
     ["https://cdn.example.com/animation.gif", "GIF"],

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import type { ChannelEmote, ChannelEmotesResponse, StreamerView } from "../../shared/types";
 import { api } from "../api";
 
@@ -30,10 +31,17 @@ export function EmotesPanel({
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function reload() {
+  async function reload(refresh = false) {
     setLoading(true);
     try {
-      setData(await api<ChannelEmotesResponse>("/api/emotes"));
+      const result = await api<ChannelEmotesResponse>(
+        refresh ? "/api/emotes?refresh=1" : "/api/emotes"
+      );
+      setData((current) => ({
+        ...result,
+        twitch: refresh && result.errors.twitch ? current.twitch : result.twitch,
+        sevenTv: refresh && result.errors.sevenTv ? current.sevenTv : result.sevenTv
+      }));
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load emotes");
@@ -138,11 +146,12 @@ export function EmotesPanel({
         <span>EMOTES</span>
         <button
           type="button"
-          onClick={() => void reload()}
+          onClick={() => void reload(true)}
           disabled={loading}
           title="Refresh emotes"
+          aria-label="Refresh emotes"
         >
-          ↻
+          <RefreshCw size={16} aria-hidden="true" />
         </button>
       </div>
       <input

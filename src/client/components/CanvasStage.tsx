@@ -706,15 +706,46 @@ function ElementContent({
     );
   }
 
+  return <RetryImage key={element.src ?? ""} element={element} />;
+}
+
+function RetryImage({ element }: { element: OverlayElement }) {
+  const [attempt, setAttempt] = useState(0);
+  const retryTimer = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
+    },
+    []
+  );
+
+  const source = element.src ?? undefined;
+  const retrySource = source && attempt > 0 ? imageRetryUrl(source, attempt) : source;
+
   return (
     <img
       className="media-element"
       style={buildCropStyle(element)}
-      src={element.src ?? undefined}
+      src={retrySource}
       alt={element.name}
       draggable={false}
+      onError={() => {
+        if (!source?.startsWith("https://") || attempt >= 3 || retryTimer.current !== null) return;
+        retryTimer.current = window.setTimeout(() => {
+          retryTimer.current = null;
+          setAttempt((current) => current + 1);
+        }, [1500, 4000, 10000][attempt]);
+      }}
     />
   );
+}
+
+export function imageRetryUrl(source: string, attempt: number): string {
+  if (!source.startsWith("https://") || attempt < 1) return source;
+  const url = new URL(source);
+  url.searchParams.set("overlayRetry", String(attempt));
+  return url.toString();
 }
 
 function buildCropStyle(element: OverlayElement): CSSProperties | undefined {

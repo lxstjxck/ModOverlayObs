@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getEbloPostId } from "./mediaUrl";
 
 export const animationSchema = z
   .enum(["none", "fade", "scale", "slide-left", "slide-right", "slide-up", "slide-down"])
@@ -85,7 +86,7 @@ export const customEmoteSchema = z
 export const mediaUrlSchema = z
   .object({
     url: z.string().url().max(2048),
-    type: z.enum(["IMAGE", "GIF", "VIDEO", "AUDIO"]),
+    type: z.enum(["IMAGE", "GIF", "VIDEO", "AUDIO"]).optional(),
     name: z.string().trim().min(1).max(180).optional()
   })
   .strict()
@@ -96,7 +97,8 @@ export const mediaUrlSchema = z
     } catch {
       return false;
     }
-  }, "Only http:// and https:// media URLs are allowed");
+  }, "Only http:// and https:// media URLs are allowed")
+  .refine((value) => Boolean(value.type || getEbloPostId(value.url)), "Media type is required");
 
 export const idSchema = z.object({ id: z.string().min(1) }).strict();
 export const elementTransformSchema = z

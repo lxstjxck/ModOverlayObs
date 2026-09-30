@@ -220,9 +220,13 @@ export function normalizeSevenTv(data: unknown): ChannelEmote[] {
   });
 }
 
-async function cached(key: string, load: () => Promise<ChannelEmote[]>): Promise<ChannelEmote[]> {
+async function cached(
+  key: string,
+  load: () => Promise<ChannelEmote[]>,
+  refresh = false
+): Promise<ChannelEmote[]> {
   const existing = cache.get(key);
-  if (existing && existing.expires > Date.now()) return existing.items;
+  if (!refresh && existing && existing.expires > Date.now()) return existing.items;
   const result = await load();
   cache.set(key, { items: result, expires: Date.now() + ttlMs });
   return result;
@@ -246,23 +250,32 @@ function customToEmote(row: CustomEmote): ChannelEmote {
   };
 }
 
-export async function getChannelEmotes(streamer: Streamer): Promise<ChannelEmotesResponse> {
+export async function getChannelEmotes(
+  streamer: Streamer,
+  refresh = false
+): Promise<ChannelEmotesResponse> {
   const errors: ChannelEmotesResponse["errors"] = {};
   const [twitchResult, sevenResult, custom] = await Promise.all([
-    cached(`${streamer.id}:twitch`, async () =>
-      normalizeTwitch(
-        await twitchApi(`chat/emotes?broadcaster_id=${await broadcasterId(streamer)}`)
-      )
+    cached(
+      `${streamer.id}:twitch`,
+      async () =>
+        normalizeTwitch(
+          await twitchApi(`chat/emotes?broadcaster_id=${await broadcasterId(streamer)}`)
+        ),
+      refresh
     ).catch((error: Error) => {
       errors.twitch = error.message;
       return [];
     }),
-    cached(`${streamer.id}:7tv`, async () =>
-      normalizeSevenTv(
-        await getJson(
-          `https://7tv.io/v3/users/twitch/${encodeURIComponent(await broadcasterId(streamer))}`
-        )
-      )
+    cached(
+      `${streamer.id}:7tv`,
+      async () =>
+        normalizeSevenTv(
+          await getJson(
+            `https://7tv.io/v3/users/twitch/${encodeURIComponent(await broadcasterId(streamer))}`
+          )
+        ),
+      refresh
     ).catch((error: Error) => {
       errors.sevenTv = error.message;
       return [];
