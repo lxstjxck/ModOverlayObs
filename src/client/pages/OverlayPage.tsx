@@ -43,7 +43,13 @@ export function OverlayPage({ token }: { token: string }) {
       query: { overlayToken: token }
     });
     socketRef.current = socket;
+    let ttsAudio: HTMLAudioElement | null = null;
+    const stopTts = () => {
+      ttsAudio?.pause();
+      ttsAudio = null;
+    };
     const clearCanvas = () => {
+      stopTts();
       setCanvas([]);
       canonicalCanvas.current = [];
       appliedCommandKeys.current.clear();
@@ -94,7 +100,32 @@ export function OverlayPage({ token }: { token: string }) {
     socket.on("video:pause", ({ id }: { id: string }) => pauseMediaNode(getPlayableMedia(id)));
     socket.on("video:stop", ({ id }: { id: string }) => stopMediaNode(getPlayableMedia(id)));
     socket.on("video:restart", ({ id }: { id: string }) => restartMediaNode(getPlayableMedia(id)));
+    socket.on("tts:play", ({ id, url }: { id: string; url: string }) => {
+      stopTts();
+      if (!url.startsWith("/api/tts/audio/") || !/^[A-Za-z0-9_-]{43}$/.test(id)) return;
+      const audio = new Audio(url);
+      ttsAudio = audio;
+      audio.addEventListener("ended", () => {
+        if (ttsAudio === audio) {
+          ttsAudio = null;
+          socket.emit("tts:done", { id });
+        }
+      });
+      audio.addEventListener("error", () => {
+        if (ttsAudio === audio) {
+          ttsAudio = null;
+          socket.emit("tts:error", { id });
+        }
+      });
+      void audio.play().catch(() => {
+        if (ttsAudio === audio) {
+          ttsAudio = null;
+          socket.emit("tts:error", { id });
+        }
+      });
+    });
     return () => {
+      stopTts();
       socket.disconnect();
       socketRef.current = null;
     };

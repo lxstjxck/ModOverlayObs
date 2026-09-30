@@ -122,6 +122,15 @@ export interface ObsSetupView {
   canvasHeight: number;
 }
 
+export interface TtsSetupView {
+  configured: boolean;
+  connected: boolean;
+  broadcasterLogin: string | null;
+  rewardId: string | null;
+  rewardCost: number;
+  ready: boolean;
+}
+
 export const permissionFlags: PermissionFlag[] = [
   "canUploadImage",
   "canUploadGif",

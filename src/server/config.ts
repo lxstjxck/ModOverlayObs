@@ -79,7 +79,8 @@ export const config = {
   initialAdminUsername: process.env.INITIAL_ADMIN_USERNAME ?? "owner",
   initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? defaultInitialPassword,
   twitchClientId: process.env.TWITCH_CLIENT_ID ?? "",
-  twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? ""
+  twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
+  ttsPython: process.env.TTS_PYTHON ?? ""
 };
 
 export const isProduction = config.nodeEnv === "production";

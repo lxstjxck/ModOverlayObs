@@ -19,6 +19,7 @@ import { accessRevocation } from "./accessRevocation";
 import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
+import { completeTts, overlayTtsDisconnected } from "./tts";
 import { isOriginAllowed, WindowRateLimiter } from "./security";
 import {
   clearLiveState,
@@ -196,9 +197,12 @@ async function handleOverlayConnection(
   overlaysByStreamer.set(streamerId, overlays);
 
   socket.on("disconnect", () => {
+    overlayTtsDisconnected(socket.id);
     overlaysByStreamer.get(streamerId)?.delete(socket.id);
     emitPresence(io, streamerId);
   });
+  socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
+  socket.on("tts:error", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, false));
   const state = await getPreviewState(streamerId);
   if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
   if (!socket.connected) return;

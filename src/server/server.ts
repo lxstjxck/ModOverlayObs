@@ -6,6 +6,7 @@ import { config, validateProductionConfig } from "./config";
 import { createAppRouter, configureStatic, configureUploads } from "./routes";
 import { applySecurityHeaders, requireCsrf, requireTrustedOrigin } from "./security";
 import { configureSocket } from "./socket";
+import { startTts, stopTts } from "./tts";
 
 async function main(): Promise<void> {
   validateProductionConfig();
@@ -31,7 +32,8 @@ async function main(): Promise<void> {
   }
 
   const httpServer = http.createServer(app);
-  configureSocket(httpServer);
+  startTts(configureSocket(httpServer));
+  httpServer.once("close", stopTts);
 
   httpServer.listen(config.port, () => {
     console.log(`Moderator Overlay server listening on http://localhost:${config.port}`);

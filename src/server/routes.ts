@@ -24,6 +24,7 @@ import { resolveEbloMedia } from "./ebloMedia";
 import { getEbloPostId } from "../shared/mediaUrl";
 import { clearEmoteCache, createCustomEmote, getChannelEmotes } from "./emotes";
 import { prisma } from "./db";
+import { ttsRouter } from "./tts";
 import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
 import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
@@ -70,6 +71,7 @@ const emoteMutationLimit = createRateLimitMiddleware({
 
 export function createAppRouter(): express.Router {
   const router = express.Router();
+  router.use("/tts", ttsRouter());
 
   router.post("/auth/login", loginIpRateLimit, loginAccountRateLimit, async (request, response) => {
     const parsed = loginSchema.safeParse(request.body);

@@ -930,6 +930,23 @@
   color: #d2d2d5;
 }
 
+.tts-setup {
+  margin: 24px 0;
+  padding: 20px;
+  border: 1px solid var(--console-line);
+  border-radius: 6px;
+  color: #d2d2d5;
+}
+
+.tts-setup h2 {
+  margin: 0 0 12px;
+  color: #f2f2f3;
+}
+
+.tts-setup .field {
+  margin: 16px 0 12px;
+}
+
 @media (max-width: 1450px) {
   .moderator-app .topbar {
     flex-wrap: wrap;

@@ -205,6 +205,7 @@ beforeEach(async () => {
     throw new Error("Refusing to reset a database outside the test fixture");
   }
   await prisma.streamer.deleteMany();
+  await prisma.settings.deleteMany({ where: { key: { startsWith: "tts:" } } });
   await prisma.user.deleteMany();
   for (const name of await files()) await fs.unlink(path.join(config.uploadDir, name));
   config.maxTotalUploadSize = 10240;
@@ -242,6 +243,131 @@ afterAll(async () => {
   await prisma.$disconnect();
   // root is the unique directory created by mkdtemp above.
   await fs.rm(fixture.root, { recursive: true, force: true });
+});
+
+it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
+  const owner = await fetch(`${baseUrl}/api/tts`, { headers: headers() });
+  expect(owner.status).toBe(200);
+  expect(await owner.json()).toMatchObject({ connected: false, rewardCost: 1000 });
+  const moderator = await fetch(`${baseUrl}/api/tts`, { headers: headers("mod-session") });
+  expect(moderator.status).toBe(403);
+  const mutateAsModerator = await fetch(`${baseUrl}/api/tts/reward`, {
+    method: "POST",
+    headers: { ...headers("mod-session"), "Content-Type": "application/json" },
+    body: JSON.stringify({ cost: 1000 })
+  });
+  expect(mutateAsModerator.status).toBe(403);
+  const noCsrf = await fetch(`${baseUrl}/api/tts/reward`, {
+    method: "POST",
+    headers: { Cookie: headers().Cookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ cost: 1000 })
+  });
+  expect(noCsrf.status).toBe(403);
+  const invalidCost = await fetch(`${baseUrl}/api/tts/reward`, {
+    method: "POST",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    body: JSON.stringify({ cost: 0 })
+  });
+  expect(invalidCost.status).toBe(400);
+  expect((await fetch(`${baseUrl}/api/tts/audio/unknown`)).status).toBe(404);
+});
+
+it("binds Twitch OAuth to the owner session and stores tokens encrypted", async () => {
+  config.twitchClientId = "test-client";
+  config.twitchClientSecret = "test-secret";
+  config.ttsPython = "/test/python";
+  config.publicOrigin = baseUrl;
+  const originalFetch = globalThis.fetch;
+  const external = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url === "https://id.twitch.tv/oauth2/token") {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            access_token: "private-access-token",
+            refresh_token: "private-refresh-token",
+            expires_in: 3600
+          }),
+          { headers: { "Content-Type": "application/json" } }
+        )
+      );
+    }
+    if (url === "https://api.twitch.tv/helix/users") {
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: [{ id: "broadcaster-1", login: "streamer" }] }), {
+          headers: { "Content-Type": "application/json" }
+        })
+      );
+    }
+    if (url.startsWith("https://api.twitch.tv/helix/channel_points/custom_rewards")) {
+      if (init?.method === "POST")
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "reward-1" }] }), {
+            headers: { "Content-Type": "application/json" }
+          })
+        );
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: [{ id: "reward-1" }] }), {
+          headers: { "Content-Type": "application/json" }
+        })
+      );
+    }
+    return originalFetch(input, init);
+  });
+  try {
+    const connect = await fetch(`${baseUrl}/api/tts/connect`, {
+      headers: headers(),
+      redirect: "manual"
+    });
+    expect(connect.status).toBe(302);
+    const location = new URL(connect.headers.get("location")!);
+    expect(location.hostname).toBe("id.twitch.tv");
+    expect(location.searchParams.get("redirect_uri")).toBe(`${baseUrl}/api/tts/callback`);
+    const state = location.searchParams.get("state")!;
+    await addSession(ownerId, "other-owner-session");
+    const wrongSession = await fetch(`${baseUrl}/api/tts/callback?state=${state}&code=auth-code`, {
+      headers: headers("other-owner-session")
+    });
+    expect(wrongSession.status).toBe(400);
+    const retryConnect = await fetch(`${baseUrl}/api/tts/connect`, {
+      headers: headers(),
+      redirect: "manual"
+    });
+    const retryState = new URL(retryConnect.headers.get("location")!).searchParams.get("state")!;
+    const callback = await fetch(`${baseUrl}/api/tts/callback?state=${retryState}&code=auth-code`, {
+      headers: headers(),
+      redirect: "manual"
+    });
+    expect(callback.status).toBe(302);
+    const stored = await prisma.settings.findUniqueOrThrow({
+      where: { key: `tts:twitch:${streamerId}` }
+    });
+    expect(stored.value).not.toContain("private-access-token");
+    expect(stored.value).not.toContain("private-refresh-token");
+    const create = await fetch(`${baseUrl}/api/tts/reward`, {
+      method: "POST",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ cost: 1000 })
+    });
+    expect(create.status).toBe(200);
+    const update = await fetch(`${baseUrl}/api/tts/reward`, {
+      method: "PATCH",
+      headers: { ...headers(), "Content-Type": "application/json" },
+      body: JSON.stringify({ cost: 2000 })
+    });
+    expect(update.status).toBe(200);
+    expect(await (await fetch(`${baseUrl}/api/tts`, { headers: headers() })).json()).toMatchObject({
+      connected: true,
+      rewardId: "reward-1",
+      rewardCost: 2000
+    });
+    expect(external).toHaveBeenCalled();
+  } finally {
+    config.twitchClientId = "";
+    config.twitchClientSecret = "";
+    config.ttsPython = "";
+    config.publicOrigin = "";
+  }
 });
 
 it("resolves an eblo.id post server-side and checks the resolved media permission", async () => {
