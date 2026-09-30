@@ -246,6 +246,19 @@ afterAll(async () => {
 });
 
 it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
+  const session = await fetch(`${baseUrl}/api/auth/me`, { headers: headers() });
+  expect(session.status).toBe(200);
+  const { csrfToken } = (await session.json()) as { csrfToken: string };
+  const initializedMutation = await fetch(`${baseUrl}/api/tts/reward`, {
+    method: "POST",
+    headers: {
+      Cookie: headers().Cookie,
+      "x-csrf-token": csrfToken,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ cost: 0 })
+  });
+  expect(initializedMutation.status).toBe(400);
   const owner = await fetch(`${baseUrl}/api/tts`, { headers: headers() });
   expect(owner.status).toBe(200);
   expect(await owner.json()).toMatchObject({ connected: false, rewardCost: 1000 });

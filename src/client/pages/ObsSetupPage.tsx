@@ -17,6 +17,7 @@ export function ObsSetupPage() {
 
   async function load() {
     try {
+      await api("/api/auth/me");
       setSetup(await api<ObsSetupView>("/api/obs"));
       try {
         const view = await api<TtsSetupView>("/api/tts");
