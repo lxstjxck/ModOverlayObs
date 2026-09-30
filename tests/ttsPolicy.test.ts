@@ -16,6 +16,20 @@ describe("Twitch TTS policy", () => {
     ).toBe("Привет стример");
   });
 
+  it("accepts a lead moderator command", () => {
+    expect(
+      moderatorTtsText(
+        {
+          broadcaster_user_id: "streamer",
+          chatter_user_id: "lead-mod",
+          badges: [{ set_id: "lead_moderator" }],
+          message: { text: "!tts проверка" }
+        },
+        "streamer"
+      )
+    ).toBe("проверка");
+  });
+
   it("rejects commands from non-moderators and rewards", () => {
     const base = {
       broadcaster_user_id: "streamer",

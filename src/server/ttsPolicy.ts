@@ -15,7 +15,9 @@ export function moderatorTtsText(event: TwitchChatMessage, broadcasterId: string
   if (event.channel_points_custom_reward_id) return null;
   if (
     event.chatter_user_id !== broadcasterId &&
-    !event.badges?.some((badge) => badge.set_id === "moderator")
+    !event.badges?.some(
+      (badge) => badge.set_id === "moderator" || badge.set_id === "lead_moderator"
+    )
   )
     return null;
   if (typeof event.message?.text !== "string") return null;
