@@ -162,15 +162,7 @@ function ownerOnly(request: Request, response: Response, next: () => void): void
 
 export function ttsRouter(): express.Router {
   const router = express.Router();
-  router.get("/audio/:id", (request, response) => {
-    const id = request.params.id;
-    if (!active || id !== active.id) {
-      response.sendStatus(404);
-      return;
-    }
-    response.setHeader("Cache-Control", "private, no-store");
-    response.type("audio/wav").sendFile(active.file);
-  });
+  router.get("/audio/:id", (request, response) => sendTtsAudio(request, response, active));
   router.get("/", requireAuth, ownerOnly, async (_request, response) => {
     const settings = await loadTwitch().catch(() => null);
     const view: TtsSetupView = {
@@ -364,6 +356,20 @@ export function ttsRouter(): express.Router {
     }
   });
   return router;
+}
+
+export function sendTtsAudio(
+  request: Request,
+  response: Response,
+  audio: { id: string; file: string } | null
+): void {
+  if (!audio || request.params.id !== audio.id) {
+    response.sendStatus(404);
+    return;
+  }
+  response.setHeader("Cache-Control", "private, no-store");
+  // The active WAV lives under uploads/.tmp, which sendFile otherwise rejects.
+  response.type("audio/wav").sendFile(audio.file, { dotfiles: "allow" });
 }
 
 export function startTts(server: Server): void {
