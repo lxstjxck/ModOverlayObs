@@ -6,7 +6,7 @@ import { BrandMark } from "../components/BrandMark";
 
 export function LoginPage() {
   const [username, setUsername] = useState("owner");
-  const [password, setPassword] = useState("change-me-now");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 

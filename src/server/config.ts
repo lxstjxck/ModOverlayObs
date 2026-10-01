@@ -5,7 +5,6 @@ dotenv.config();
 
 const projectRoot = process.cwd();
 const defaultSessionSecret = "development-only-change-this-secret";
-const defaultInitialPassword = "change-me-now";
 
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -77,7 +76,7 @@ export const config = {
   maxTotalUploadSize: numberEnv("MAX_TOTAL_UPLOAD_SIZE", 5 * 1024 * 1024 * 1024),
   originAllowlist: buildAllowedOrigins(domain, publicOrigin, port),
   initialAdminUsername: process.env.INITIAL_ADMIN_USERNAME ?? "owner",
-  initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? defaultInitialPassword,
+  initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? "",
   twitchClientId: process.env.TWITCH_CLIENT_ID ?? "",
   twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
   ttsPython: process.env.TTS_PYTHON ?? ""
@@ -103,9 +102,6 @@ export function validateProductionConfig(): void {
   }
   if (config.sessionSecret.length < 32) {
     errors.push("SESSION_SECRET must be at least 32 characters.");
-  }
-  if (config.initialAdminPassword === defaultInitialPassword) {
-    errors.push("INITIAL_ADMIN_PASSWORD must not use the development default in production.");
   }
 
   if (errors.length > 0) {

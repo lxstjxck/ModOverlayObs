@@ -9,6 +9,16 @@ import { defaultPermissionsByRole } from "../shared/types";
 import { cleanupStaleTtsFiles } from "./ttsFiles";
 
 export async function ensureRuntimeState(): Promise<void> {
+  const userCount = await prisma.user.count();
+  if (userCount === 0) {
+    const password = config.initialAdminPassword;
+    if (password.trim().length < 12 || password.trim() === "change-me-now") {
+      throw new Error(
+        "Set INITIAL_ADMIN_PASSWORD to a unique password of at least 12 characters before the first start."
+      );
+    }
+  }
+
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(path.resolve(config.projectRoot, "database"), { recursive: true });
   await fs.mkdir(path.join(config.uploadDir, ".tmp"), { recursive: true });
@@ -30,7 +40,6 @@ export async function ensureRuntimeState(): Promise<void> {
     });
   }
 
-  const userCount = await prisma.user.count();
   if (userCount === 0) {
     const passwordHash = await bcrypt.hash(config.initialAdminPassword, 12);
     await prisma.user.create({

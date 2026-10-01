@@ -7,6 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { io as connect, type Socket } from "socket.io-client";
 import type { Server } from "socket.io";
+import bcrypt from "bcryptjs";
 
 const fixture = await vi.hoisted(async () => {
   const fs = await import("node:fs/promises");
@@ -44,7 +45,9 @@ vi.mock("../src/server/config", () => ({
     maxVideoSize: 1024,
     maxAudioSize: 1024,
     maxTotalUploadSize: 10240,
-    originAllowlist: []
+    originAllowlist: [],
+    initialAdminUsername: "owner",
+    initialAdminPassword: ""
   }
 }));
 
@@ -60,6 +63,7 @@ import { configureSocket } from "../src/server/socket";
 import { requireCsrf, requireTrustedOrigin } from "../src/server/security";
 import { accessRevocation } from "../src/server/accessRevocation";
 import { getChannelEmotes } from "../src/server/emotes";
+import { ensureRuntimeState } from "../src/server/bootstrap";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -243,6 +247,24 @@ afterAll(async () => {
   await prisma.$disconnect();
   // root is the unique directory created by mkdtemp above.
   await fs.rm(fixture.root, { recursive: true, force: true });
+});
+
+it("requires a non-template password before creating the first owner", async () => {
+  await prisma.user.deleteMany();
+  for (const password of ["", "change-me-now", "change-me-now ", "too-short", "            "]) {
+    config.initialAdminPassword = password;
+    await expect(ensureRuntimeState()).rejects.toThrow("INITIAL_ADMIN_PASSWORD");
+    expect(await prisma.user.count()).toBe(0);
+  }
+
+  config.initialAdminPassword = "unique-test-password-123";
+  await ensureRuntimeState();
+  const owner = await prisma.user.findUnique({ where: { username: "owner" } });
+  expect(owner?.role).toBe("OWNER");
+  expect(await bcrypt.compare(config.initialAdminPassword, owner?.passwordHash ?? "")).toBe(true);
+  config.initialAdminPassword = "";
+  await expect(ensureRuntimeState()).resolves.toBeUndefined();
+  expect(await prisma.user.count()).toBe(1);
 });
 
 it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
