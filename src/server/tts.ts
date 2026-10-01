@@ -42,6 +42,10 @@ let refreshPromise: Promise<{ token: string; settings: StoredTwitch }> | null = 
 let cleanupTimer: NodeJS.Timeout | null = null;
 const costSchema = z.object({ cost: z.number().int().min(1).max(1_000_000) });
 
+function debugTts(message: string): void {
+  if (process.env.TTS_DEBUG === "1") console.info(`[TTS] ${message}`);
+}
+
 function callbackUrl(): string {
   return `${(config.publicOrigin || config.domain).replace(/\/$/, "")}/api/tts/callback`;
 }
@@ -365,6 +369,7 @@ export function ttsRouter(): express.Router {
 export function startTts(server: Server): void {
   io = server;
   stopping = false;
+  debugTts("diagnostics enabled");
   cleanupTimer = setInterval(() => {
     void cleanupStaleTtsFiles().catch(() => console.warn("TTS temporary cleanup failed"));
   }, 5 * 60_000);
@@ -416,6 +421,7 @@ function connectSocket(url: string, transferred: boolean): void {
       return;
     }
     if (socket !== ws || stopping) return;
+    debugTts("Twitch socket closed; reconnecting");
     socket = null;
     subscribed = false;
     reconnectTimer = setTimeout(
@@ -469,6 +475,7 @@ async function handleTwitchMessage(
         )
       );
       subscribed = true;
+      debugTts("Twitch chat and reward subscriptions active");
       return;
     }
     if (packet.metadata.message_type === "session_welcome" && transferred) {
@@ -492,19 +499,34 @@ async function handleTwitchMessage(
       return;
     }
     if (packet.metadata.message_type !== "notification" || !packet.payload.event) return;
+    const event = packet.payload.event;
+    const chatCommand =
+      packet.metadata.subscription_type === "channel.chat.message" &&
+      typeof (event.message as { text?: unknown } | undefined)?.text === "string" &&
+      /^!tts(?:\s|$)/i.test((event.message as { text: string }).text.trim());
+    if (chatCommand) debugTts("chat command event received");
     const now = Date.now();
     for (const [id, time] of seenEvents) if (now - time > 10 * 60_000) seenEvents.delete(id);
     if (seenEvents.has(packet.metadata.message_id)) return;
     seenEvents.set(packet.metadata.message_id, now);
     const settings = await loadTwitch();
-    if (!settings) return;
+    if (!settings) {
+      if (chatCommand) debugTts("chat command ignored: Twitch settings unavailable");
+      return;
+    }
     const streamer = await getDefaultStreamer();
-    if (streamer.twitchBroadcasterId !== settings.broadcasterId) return;
-    const event = packet.payload.event;
+    if (streamer.twitchBroadcasterId !== settings.broadcasterId) {
+      if (chatCommand) debugTts("chat command ignored: broadcaster mismatch");
+      return;
+    }
     if (packet.metadata.subscription_type === "channel.chat.message") {
       const text = moderatorTtsText(event as TwitchChatMessage, settings.broadcasterId);
-      if (text && typeof event.chatter_user_id === "string")
+      if (text && typeof event.chatter_user_id === "string") {
+        debugTts("chat command accepted");
         enqueue({ text, userId: event.chatter_user_id });
+      } else if (chatCommand) {
+        debugTts("chat command ignored: role or command format");
+      }
     } else if (
       packet.metadata.subscription_type === "channel.channel_points_custom_reward_redemption.add"
     ) {
@@ -521,6 +543,7 @@ async function handleTwitchMessage(
         void settleReward(event.id, "CANCELED");
     }
   } catch {
+    debugTts("Twitch event handler failed");
     if (ws.readyState === WebSocket.OPEN) ws.close();
     // No credentials or message text are logged.
   }
@@ -534,15 +557,21 @@ function enqueue(job: TtsJob): boolean {
         (room) => room.startsWith("streamer:") && room.endsWith(":overlay")
       )
     : null;
-  if (
-    !streamerId ||
-    !io?.sockets.adapter.rooms.get(streamerId)?.size ||
-    queue.length >= 10 ||
-    now - (lastUsed.get(job.userId) ?? 0) < 30_000
-  )
+  if (!streamerId || !io?.sockets.adapter.rooms.get(streamerId)?.size) {
+    debugTts("job rejected: no connected overlay");
     return false;
+  }
+  if (queue.length >= 10) {
+    debugTts("job rejected: queue full");
+    return false;
+  }
+  if (now - (lastUsed.get(job.userId) ?? 0) < 30_000) {
+    debugTts("job rejected: cooldown");
+    return false;
+  }
   lastUsed.set(job.userId, now);
   queue.push(job);
+  debugTts("job queued");
   void processQueue();
   return true;
 }
@@ -553,19 +582,25 @@ async function processQueue(): Promise<void> {
   const job = queue.shift()!;
   const id = crypto.randomBytes(32).toString("base64url");
   const file = path.join(config.uploadDir, ".tmp", `tts-${id}.wav`);
+  let phase = "preparing";
   try {
     const streamer = await getDefaultStreamer();
     const target = io.sockets.adapter.rooms.get(`streamer:${streamer.id}:overlay`)?.values().next()
       .value as string | undefined;
     if (!target) throw new Error("OBS disconnected");
+    phase = "generating";
+    debugTts("generating WAV");
     await synthesize(job.text, file);
+    phase = "dispatching";
     if (!io.sockets.sockets.has(target)) throw new Error("OBS disconnected");
     const timer = setTimeout(() => {
       void finishJob(false);
     }, 90_000);
     active = { id, file, socketId: target, job, timer };
+    debugTts("WAV sent to overlay");
     io.to(target).emit("tts:play", { id, url: `/api/tts/audio/${id}` });
   } catch {
+    debugTts(`job failed during ${phase}`);
     await fs.rm(file, { force: true }).catch(() => {});
     if (job.redemptionId) void settleReward(job.redemptionId, "CANCELED");
   } finally {
@@ -593,7 +628,10 @@ function synthesize(text: string, output: string): Promise<void> {
 }
 
 export function completeTts(socketId: string, id: unknown, success: boolean): void {
-  if (active && active.id === id && active.socketId === socketId) void finishJob(success);
+  if (active && active.id === id && active.socketId === socketId) {
+    debugTts(success ? "overlay reported playback complete" : "overlay reported playback error");
+    void finishJob(success);
+  }
 }
 
 export function overlayTtsDisconnected(socketId: string): void {
