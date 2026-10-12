@@ -22,6 +22,14 @@ import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { reconcilePreview } from "../previewSync";
 import { readMediaDimensions } from "../mediaDimensions";
+import { layerOrderPatches, reversePatch, transformCommand } from "../canvasCommands";
+
+type HistoryChange = {
+  id: string;
+  before: Partial<OverlayElement>;
+  after: Partial<OverlayElement>;
+};
+type HistoryEntry = { changes: HistoryChange[] };
 
 interface MeResponse {
   user: UserView;
@@ -56,6 +64,11 @@ export function ModeratorApp() {
   const transformTimers = useRef(new Map<string, number>());
   const lastTransformSent = useRef(new Map<string, number>());
   const lastDebugPing = useRef(0);
+  const previewRef = useRef<OverlayElement[]>([]);
+  const editorActive = useRef(false);
+  const copiedId = useRef<string | null>(null);
+  const history = useRef<{ undo: HistoryEntry[]; redo: HistoryEntry[] }>({ undo: [], redo: [] });
+  previewRef.current = preview;
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +106,13 @@ export function ModeratorApp() {
       window.location.href = "/login";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
+      if (
+        previewRef.current.length > 0 &&
+        (previewRef.current.length !== state.length ||
+          previewRef.current.some((item) => !state.some((next) => next.id === item.id)))
+      ) {
+        history.current = { undo: [], redo: [] };
+      }
       const reconciled = reconcilePreview(
         state,
         inFlightPreviewPatches.current,
@@ -127,6 +147,7 @@ export function ModeratorApp() {
       );
     });
     socket.on("disconnect", () => {
+      history.current = { undo: [], redo: [] };
       for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
       previewPatchTimers.current.clear();
       pendingPreviewPatches.current.clear();
@@ -174,20 +195,111 @@ export function ModeratorApp() {
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (
+        !editorActive.current ||
+        !canEditCanvas ||
+        !streamer ||
         target?.closest("input, textarea, select, [contenteditable=true], [role=dialog]") ||
-        (event.key !== "Delete" && event.key !== "Backspace") ||
-        !selectedId
-      ) {
+        event.altKey ||
+        event.metaKey
+      )
+        return;
+      const selected = previewRef.current.find((item) => item.id === selectedId);
+      const ctrl = event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (ctrl && key === "z") {
+        event.preventDefault();
+        runHistory(event.shiftKey ? "redo" : "undo");
         return;
       }
-      event.preventDefault();
-      emit("preview:remove", { id: selectedId });
-      setSelectedId(null);
+      if (ctrl && key === "v" && copiedId.current) {
+        event.preventDefault();
+        if (previewRef.current.some((item) => item.id === copiedId.current)) {
+          history.current = { undo: [], redo: [] };
+          emit("preview:duplicate", { id: copiedId.current });
+        }
+        return;
+      }
+      if (!selected) return;
+      if (ctrl && key === "c") {
+        event.preventDefault();
+        copiedId.current = selected.id;
+        return;
+      }
+      if (!ctrl && (key === "delete" || key === "backspace")) {
+        event.preventDefault();
+        history.current = { undo: [], redo: [] };
+        emit("preview:remove", { id: selected.id });
+        setSelectedId(null);
+        return;
+      }
+      if (!ctrl && ["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(key)) {
+        event.preventDefault();
+        patchPreviewLocal(selected.id, {
+          x: selected.x + (key === "arrowleft" ? -1 : key === "arrowright" ? 1 : 0),
+          y: selected.y + (key === "arrowup" ? -1 : key === "arrowdown" ? 1 : 0)
+        });
+        return;
+      }
+      if (!ctrl) return;
+      if (key === "e") {
+        event.preventDefault();
+        document.querySelector<HTMLInputElement>("[data-transform-focus=true]")?.focus();
+        return;
+      }
+      const command =
+        key === "r"
+          ? "reset"
+          : key === "f"
+            ? "fit"
+            : key === "s"
+              ? "stretch"
+              : key === "d"
+                ? "center"
+                : null;
+      if (command) {
+        event.preventDefault();
+        patchPreviewLocal(
+          selected.id,
+          transformCommand(
+            selected,
+            streamer,
+            command,
+            media.find((item) => item.id === selected.mediaId)
+          )
+        );
+        return;
+      }
+      const direction =
+        key === "arrowup"
+          ? "up"
+          : key === "arrowdown"
+            ? "down"
+            : key === "home"
+              ? "top"
+              : key === "end"
+                ? "bottom"
+                : null;
+      if (direction) {
+        event.preventDefault();
+        const patches = layerOrderPatches(previewRef.current, selected.id, direction);
+        if (patches.length > 0) {
+          const changes = patches.flatMap(({ id, zIndex }) => {
+            const current = previewRef.current.find((item) => item.id === id);
+            return current && current.zIndex !== zIndex
+              ? [{ id, before: { zIndex: current.zIndex }, after: { zIndex } }]
+              : [];
+          });
+          if (changes.length > 0) {
+            recordHistory({ changes });
+            for (const change of changes)
+              patchPreviewLocal(change.id, change.after, undefined, false);
+          }
+        }
+      }
     }
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId]);
+  }, [selectedId, canEditCanvas, streamer, media]);
 
   useEffect(() => {
     if (mediaDeleteIds.length === 0) return;
@@ -269,7 +381,50 @@ export function ModeratorApp() {
     socketRef.current?.emit(event, payload);
   }
 
-  function patchPreviewLocal(id: string, patch: Partial<OverlayElement>) {
+  function recordHistory(entry: HistoryEntry) {
+    history.current.undo.push(entry);
+    if (history.current.undo.length > 100) history.current.undo.shift();
+    history.current.redo = [];
+  }
+
+  function runHistory(direction: "undo" | "redo") {
+    const stack = history.current[direction];
+    const entry = stack.pop();
+    if (!entry) return;
+    const expected = direction === "undo" ? "after" : "before";
+    if (
+      entry.changes.some((change) => {
+        const element = previewRef.current.find((item) => item.id === change.id);
+        return (
+          !element ||
+          Object.entries(change[expected]).some(
+            ([key, value]) =>
+              JSON.stringify(element[key as keyof OverlayElement]) !== JSON.stringify(value)
+          )
+        );
+      })
+    ) {
+      history.current = { undo: [], redo: [] };
+      setError("Undo history was cleared because the canvas changed elsewhere.");
+      return;
+    }
+    for (const change of entry.changes) {
+      patchPreviewLocal(
+        change.id,
+        change[direction === "undo" ? "before" : "after"],
+        undefined,
+        false
+      );
+    }
+    history.current[direction === "undo" ? "redo" : "undo"].push(entry);
+  }
+
+  function patchPreviewLocal(
+    id: string,
+    patch: Partial<OverlayElement>,
+    before?: OverlayElement,
+    record = true
+  ) {
     if (!canEditCanvas) {
       setError("Canvas editing requires permission to edit and control the live overlay.");
       return;
@@ -278,9 +433,16 @@ export function ModeratorApp() {
       setError("No server connection. Wait for reconnection before editing.");
       return;
     }
-    setPreview((items) =>
-      items.map((item) => (item.id === id ? mergeElementPatch(item, patch) : item))
+    const current = before ?? previewRef.current.find((item) => item.id === id);
+    if (record && current) {
+      const previous = reversePatch(current, patch);
+      if (JSON.stringify(previous) !== JSON.stringify(patch))
+        recordHistory({ changes: [{ id, before: previous, after: patch }] });
+    }
+    previewRef.current = previewRef.current.map((item) =>
+      item.id === id ? mergeElementPatch(item, patch) : item
     );
+    setPreview(previewRef.current);
     schedulePreviewPatch(id, patch);
   }
 
@@ -331,12 +493,12 @@ export function ModeratorApp() {
     }
   }
 
-  function commitTransform(id: string, patch: Partial<OverlayElement>) {
+  function commitTransform(id: string, patch: Partial<OverlayElement>, before: OverlayElement) {
     const timer = transformTimers.current.get(id);
     if (timer !== undefined) window.clearTimeout(timer);
     transformTimers.current.delete(id);
     transientPatches.current.delete(id);
-    patchPreviewLocal(id, patch);
+    patchPreviewLocal(id, patch, before);
     const flushTimer = previewPatchTimers.current.get(id);
     if (flushTimer !== undefined) window.clearTimeout(flushTimer);
     previewPatchTimers.current.delete(id);
@@ -410,6 +572,13 @@ export function ModeratorApp() {
   return (
     <main
       className="moderator-app"
+      onPointerDownCapture={(event) => {
+        editorActive.current = Boolean(
+          (event.target as HTMLElement).closest(
+            ".workspace-center, .layers-panel, .properties-panel"
+          )
+        );
+      }}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();
@@ -563,7 +732,7 @@ export function ModeratorApp() {
               <i className="caption-key spawn" /> SPAWN · STAGING
             </span>
             <span className="workspace-caption-note">
-              Ctrl + колесо — масштаб · тяните фон — обзор
+              Колесо — масштаб · Space + перетаскивание — обзор
             </span>
           </div>
         </section>
@@ -571,8 +740,18 @@ export function ModeratorApp() {
         <PropertiesPanel
           selected={selected}
           onUpdate={patchPreviewLocal}
-          onDuplicate={() => selectedId && emit("preview:duplicate", { id: selectedId })}
-          onRemove={() => selectedId && emit("preview:remove", { id: selectedId })}
+          onDuplicate={() => {
+            if (selectedId) {
+              history.current = { undo: [], redo: [] };
+              emit("preview:duplicate", { id: selectedId });
+            }
+          }}
+          onRemove={() => {
+            if (selectedId) {
+              history.current = { undo: [], redo: [] };
+              emit("preview:remove", { id: selectedId });
+            }
+          }}
         />
       </div>
 

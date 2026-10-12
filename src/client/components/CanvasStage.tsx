@@ -10,6 +10,7 @@ import { EyeOff } from "lucide-react";
 import { buildYouTubeEmbedUrl } from "../../shared/mediaUrl";
 import type { OverlayElement, StreamerView } from "../../shared/types";
 import { setMediaNodeMuted, setMediaNodeVolume } from "../mediaPlayback";
+import { cropClipPath, getCrop, scaleCrop } from "../cropGeometry";
 import { sortElements } from "../utils";
 
 interface CanvasStageProps {
@@ -20,11 +21,12 @@ interface CanvasStageProps {
   onSelect?: (id: string) => void;
   onUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
   onTransientUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
-  onCommitUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
+  onCommitUpdate?: (id: string, patch: Partial<OverlayElement>, before: OverlayElement) => void;
 }
 
 type ResizeHandle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 type ElementBounds = Pick<OverlayElement, "x" | "y" | "width" | "height">;
+type SnapGuides = { left: boolean; right: boolean; top: boolean; bottom: boolean };
 const SNAP_DISTANCE_PX = 10;
 
 interface DragState {
@@ -57,11 +59,15 @@ export function CanvasStage({
 }: CanvasStageProps) {
   const canEdit = mode === "workspace" && Boolean(onTransientUpdate ?? onUpdate);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const panDrag = useRef<PanDrag | null>(null);
+  const spacePressed = useRef(false);
   const zoomRef = useRef(1);
+  const wheelCenterRef = useRef<{ x: number; y: number } | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [snapGuides, setSnapGuides] = useState<SnapGuides | null>(null);
   const stagingSide = Math.max(540, Math.round(streamer.canvasWidth * 0.3));
   const stagingTop = Math.max(170, Math.round(streamer.canvasHeight * 0.16));
   const stagingBottom = Math.max(390, Math.round(streamer.canvasHeight * 0.36));
@@ -72,6 +78,33 @@ export function CanvasStage({
     streamer.canvasHeight
   );
   const scale = fitScale * zoom;
+
+  useEffect(() => {
+    if (mode !== "workspace") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space" || isTypingTarget(event.target)) return;
+      spacePressed.current = true;
+      if (viewportRef.current?.matches(":hover")) event.preventDefault();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") spacePressed.current = false;
+    };
+    const onBlur = () => {
+      spacePressed.current = false;
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, [mode]);
+
+  useLayoutEffect(() => {
+    wheelCenterRef.current = null;
+  }, [zoom, pan]);
 
   useLayoutEffect(() => {
     if (!viewportRef.current) return;
@@ -93,31 +126,56 @@ export function CanvasStage({
     if (mode !== "workspace" || !viewportRef.current) return;
     const viewport = viewportRef.current;
     const onWheel = (event: WheelEvent) => {
+      const surface = surfaceRef.current;
+      if (!surface) return;
       event.preventDefault();
-      if (event.ctrlKey || event.metaKey) {
-        const current = zoomRef.current;
-        const next = Math.min(6, Math.max(0.25, current * Math.exp(-event.deltaY * 0.0015)));
-        if (next === current) return;
-        const rect = viewport.getBoundingClientRect();
-        const focusX = event.clientX - rect.left - rect.width / 2;
-        const focusY = event.clientY - rect.top - rect.height / 2;
-        const ratio = next / current;
-        setPan((previous) => ({
-          x: focusX - (focusX - previous.x) * ratio,
-          y: focusY - (focusY - previous.y) * ratio
-        }));
-        zoomRef.current = next;
-        setZoom(next);
-      } else {
-        setPan((previous) => ({
-          x: previous.x - (event.shiftKey ? event.deltaY : event.deltaX),
-          y: previous.y - (event.shiftKey ? 0 : event.deltaY)
-        }));
-      }
+      const rect = surface.getBoundingClientRect();
+      const center = wheelCenterRef.current ?? {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      // The workspace surface scales from its top-left corner.
+      const stagingOffset = {
+        x: (stagingSide - 100) / 2,
+        y: (stagingTop - stagingBottom) / 2
+      };
+      const next = zoomAroundPointer(
+        zoomRef.current,
+        event.deltaY,
+        event.clientX,
+        event.clientY,
+        center,
+        fitScale,
+        stagingOffset
+      );
+      if (next.zoom === zoomRef.current) return;
+      const scaleDelta = (next.zoom - zoomRef.current) * fitScale;
+      wheelCenterRef.current = {
+        x: center.x + next.panDelta.x + stagingOffset.x * scaleDelta,
+        y: center.y + next.panDelta.y + stagingOffset.y * scaleDelta
+      };
+      zoomRef.current = next.zoom;
+      setPan((previous) => ({ x: previous.x + next.panDelta.x, y: previous.y + next.panDelta.y }));
+      setZoom(next.zoom);
     };
     viewport.addEventListener("wheel", onWheel, { passive: false });
     return () => viewport.removeEventListener("wheel", onWheel);
-  }, [mode]);
+  }, [
+    mode,
+    fitScale,
+    stagingSide,
+    stagingTop,
+    stagingBottom,
+    streamer.canvasWidth,
+    streamer.canvasHeight
+  ]);
+
+  function setZoomPreset(percent: number | null) {
+    const next = percent === null ? 1 : clamp(percent / fitScale, 0.25, 6);
+    zoomRef.current = next;
+    setZoom(next);
+    setPan({ x: 0, y: 0 });
+  }
 
   const overlayGeometry = calculateOverlayGeometry(
     viewportSize.width,
@@ -150,8 +208,16 @@ export function CanvasStage({
         };
 
   function startPan(event: ReactPointerEvent<HTMLDivElement>) {
-    if (mode !== "workspace" || (event.button !== 0 && event.button !== 1)) return;
-    if (event.button === 0 && (event.target as HTMLElement).closest(".stage-element")) return;
+    if (mode !== "workspace") return;
+    const target = event.target as HTMLElement;
+    if (
+      !shouldStartPan(
+        event.button,
+        spacePressed.current,
+        Boolean(target.closest(".stage-zoom-controls"))
+      )
+    )
+      return;
     event.preventDefault();
     panDrag.current = {
       pointerId: event.pointerId,
@@ -184,6 +250,7 @@ export function CanvasStage({
     handle?: ResizeHandle
   ) {
     if (event.button !== 0) return;
+    if (spacePressed.current) return;
     if (!canEdit) {
       onSelect?.(element.id);
       return;
@@ -219,32 +286,28 @@ export function CanvasStage({
       const dy = ((moveEvent.clientY - drag.startY) / drag.rect.height) * streamer.canvasHeight;
       const thresholdX = (SNAP_DISTANCE_PX * streamer.canvasWidth) / drag.rect.width;
       const thresholdY = (SNAP_DISTANCE_PX * streamer.canvasHeight) / drag.rect.height;
+      const targets = elements.filter((item) => item.id !== drag.id && item.visible);
       if (drag.kind === "move") {
+        setSnapGuides(null);
         const position = {
           x: drag.original.x + dx,
           y: drag.original.y + dy
         };
-        latestPatch =
-          drag.original.type === "TEXT" ||
-          moveEvent.altKey ||
-          moveEvent.ctrlKey ||
-          moveEvent.metaKey
-            ? position
-            : snapMoveToCanvasEdges(
-                { ...drag.original, ...position },
-                streamer.canvasWidth,
-                streamer.canvasHeight,
-                thresholdX,
-                thresholdY
-              );
+        latestPatch = !snappingEnabled(moveEvent)
+          ? position
+          : snapMoveToCanvasEdges(
+              { ...drag.original, ...position },
+              streamer.canvasWidth,
+              streamer.canvasHeight,
+              thresholdX,
+              thresholdY,
+              targets
+            );
       } else {
         const resized = resizeElement(drag.original, drag.handle ?? "se", dx, dy, moveEvent);
-        latestPatch =
-          drag.original.type === "TEXT" ||
+        const geometry =
           moveEvent.altKey ||
-          moveEvent.shiftKey ||
-          moveEvent.ctrlKey ||
-          moveEvent.metaKey ||
+          !snappingEnabled(moveEvent) ||
           resized.x === undefined ||
           resized.y === undefined ||
           resized.width === undefined ||
@@ -256,8 +319,25 @@ export function CanvasStage({
                 streamer.canvasWidth,
                 streamer.canvasHeight,
                 thresholdX,
-                thresholdY
+                thresholdY,
+                {
+                  aspectRatio:
+                    !moveEvent.shiftKey && (drag.handle ?? "se").length === 2
+                      ? drag.original.width / drag.original.height
+                      : undefined,
+                  targets
+                }
               );
+        setSnapGuides(
+          !moveEvent.altKey && geometry.width !== undefined && geometry.height !== undefined
+            ? activeSnapGuides(resized, geometry, streamer.canvasWidth, streamer.canvasHeight)
+            : null
+        );
+        const scaledCrop =
+          !moveEvent.altKey && geometry.width !== undefined && geometry.height !== undefined
+            ? scaleCrop(drag.original, geometry.width, geometry.height)
+            : undefined;
+        latestPatch = { ...geometry, ...(scaledCrop ? { props: scaledCrop } : {}) };
       }
       (onTransientUpdate ?? onUpdate)?.(drag.id, latestPatch);
     }
@@ -265,7 +345,8 @@ export function CanvasStage({
     function handleUp(upEvent: PointerEvent) {
       if (upEvent.pointerId !== pointerId) return;
       handleMove(upEvent);
-      if (latestPatch) onCommitUpdate?.(drag.id, latestPatch);
+      if (latestPatch) onCommitUpdate?.(drag.id, latestPatch, drag.original);
+      setSnapGuides(null);
       currentTarget.releasePointerCapture(pointerId);
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
@@ -288,19 +369,34 @@ export function CanvasStage({
         onPointerCancel={endPan}
       >
         {mode === "workspace" && (
-          <div className="stage-zoom-indicator">{Math.round(scale * 100)}% · Ctrl + колесо</div>
+          <div className="stage-zoom-controls">
+            <span>{Math.round(scale * 100)}% · колесо</span>
+            {([null, 0.25, 0.5, 0.75, 1] as const).map((percent) => (
+              <button key={percent ?? "fit"} type="button" onClick={() => setZoomPreset(percent)}>
+                {percent === null ? "FIT" : `${percent * 100}%`}
+              </button>
+            ))}
+          </div>
         )}
         <div
           className="stage-surface"
+          ref={surfaceRef}
           data-stage-mode={mode}
           style={surfaceStyle}
           onPointerDown={(event) => {
-            if (mode === "workspace" && event.button === 0) {
+            if (mode === "workspace" && event.button === 0 && !spacePressed.current) {
               onSelect?.("");
             }
           }}
         >
           {mode === "workspace" && <WorkspaceZones />}
+          {mode === "workspace" && snapGuides && (
+            <div className="snap-guides" aria-hidden="true">
+              {Object.entries(snapGuides).map(([edge, active]) =>
+                active ? <span key={edge} className={`snap-guide snap-guide-${edge}`} /> : null
+              )}
+            </div>
+          )}
           {sortElements(elements).map((element) => (
             <div
               key={element.id}
@@ -375,17 +471,52 @@ export function calculateOverlayGeometry(
   };
 }
 
-function nearestEdgeCorrection(
-  edgePositions: number[],
-  canvasSize: number,
+export function zoomAroundPointer(
+  zoom: number,
+  deltaY: number,
+  pointerX: number,
+  pointerY: number,
+  surfaceCenter: { x: number; y: number },
+  fitScale: number,
+  stagingOffset: { x: number; y: number }
+): { zoom: number; panDelta: { x: number; y: number } } {
+  const next = clamp(zoom * Math.exp(-deltaY * 0.0015), 0.25, 6);
+  const ratio = next / zoom;
+  const scaleDelta = (next - zoom) * fitScale;
+  return {
+    zoom: next,
+    panDelta: {
+      x: (1 - ratio) * (pointerX - surfaceCenter.x) - stagingOffset.x * scaleDelta,
+      y: (1 - ratio) * (pointerY - surfaceCenter.y) - stagingOffset.y * scaleDelta
+    }
+  };
+}
+
+export function snappingEnabled(event: Pick<PointerEvent, "ctrlKey" | "metaKey">): boolean {
+  return !event.ctrlKey && !event.metaKey;
+}
+
+export function shouldStartPan(button: number, space: boolean, overControls: boolean): boolean {
+  return !overControls && (button === 1 || (button === 0 && space));
+}
+
+function nearestAlignmentCorrection(
+  alignments: Array<{ source: number; targets: number[] }>,
   threshold: number
 ): number {
-  const corrections = edgePositions.flatMap((position) => [-position, canvasSize - position]);
-  const nearest = corrections.reduce(
-    (best, correction) => (Math.abs(correction) < Math.abs(best) ? correction : best),
-    Number.POSITIVE_INFINITY
-  );
+  let nearest = Number.POSITIVE_INFINITY;
+  for (const alignment of alignments) {
+    for (const target of alignment.targets) {
+      const correction = target - alignment.source;
+      if (Math.abs(correction) < Math.abs(nearest)) nearest = correction;
+    }
+  }
   return Math.abs(nearest) <= threshold ? nearest : 0;
+}
+
+function targetEdges(elements: OverlayElement[], axis: "x" | "y"): number[] {
+  const size = axis === "x" ? "width" : "height";
+  return elements.flatMap((item) => [item[axis], item[axis] + item[size]]);
 }
 
 export function snapMoveToCanvasEdges(
@@ -393,15 +524,32 @@ export function snapMoveToCanvasEdges(
   canvasWidth: number,
   canvasHeight: number,
   thresholdX: number,
-  thresholdY: number
+  thresholdY: number,
+  targets: OverlayElement[] = []
 ): Pick<ElementBounds, "x" | "y"> {
+  const xEdges = [0, canvasWidth, ...targetEdges(targets, "x")];
+  const yEdges = [0, canvasHeight, ...targetEdges(targets, "y")];
   return {
     x:
       bounds.x +
-      nearestEdgeCorrection([bounds.x, bounds.x + bounds.width], canvasWidth, thresholdX),
+      nearestAlignmentCorrection(
+        [
+          { source: bounds.x, targets: xEdges },
+          { source: bounds.x + bounds.width, targets: xEdges },
+          { source: bounds.x + bounds.width / 2, targets: [canvasWidth / 2] }
+        ],
+        thresholdX
+      ),
     y:
       bounds.y +
-      nearestEdgeCorrection([bounds.y, bounds.y + bounds.height], canvasHeight, thresholdY)
+      nearestAlignmentCorrection(
+        [
+          { source: bounds.y, targets: yEdges },
+          { source: bounds.y + bounds.height, targets: yEdges },
+          { source: bounds.y + bounds.height / 2, targets: [canvasHeight / 2] }
+        ],
+        thresholdY
+      )
   };
 }
 
@@ -411,30 +559,101 @@ export function snapResizeToCanvasEdges(
   canvasWidth: number,
   canvasHeight: number,
   thresholdX: number,
-  thresholdY: number
+  thresholdY: number,
+  options: { aspectRatio?: number; targets?: OverlayElement[] } = {}
 ): ElementBounds {
-  let { x, y, width, height } = bounds;
-  if (handle.includes("e")) {
-    const correction = nearestEdgeCorrection([x + width], canvasWidth, thresholdX);
-    if (width + correction >= 8) width += correction;
-  } else if (handle.includes("w")) {
-    const correction = nearestEdgeCorrection([x], canvasWidth, thresholdX);
-    if (width - correction >= 8) {
-      x += correction;
-      width -= correction;
+  const horizontal = handle.includes("e") ? "e" : handle.includes("w") ? "w" : null;
+  const vertical = handle.includes("s") ? "s" : handle.includes("n") ? "n" : null;
+  const horizontalEdge = horizontal === "e" ? bounds.x + bounds.width : bounds.x;
+  const verticalEdge = vertical === "s" ? bounds.y + bounds.height : bounds.y;
+  const correctionX = horizontal
+    ? nearestAlignmentCorrection(
+        [
+          {
+            source: horizontalEdge,
+            targets: [0, canvasWidth / 2, canvasWidth, ...targetEdges(options.targets ?? [], "x")]
+          }
+        ],
+        thresholdX
+      )
+    : 0;
+  const correctionY = vertical
+    ? nearestAlignmentCorrection(
+        [
+          {
+            source: verticalEdge,
+            targets: [0, canvasHeight / 2, canvasHeight, ...targetEdges(options.targets ?? [], "y")]
+          }
+        ],
+        thresholdY
+      )
+    : 0;
+  const widthDelta = correctionX * (horizontal === "e" ? 1 : -1);
+  const heightDelta = correctionY * (vertical === "s" ? 1 : -1);
+  const withSize = (width: number, height: number): ElementBounds => ({
+    x:
+      width === bounds.width
+        ? bounds.x
+        : horizontal === "w"
+          ? bounds.x + bounds.width - width
+          : bounds.x,
+    y:
+      height === bounds.height
+        ? bounds.y
+        : vertical === "n"
+          ? bounds.y + bounds.height - height
+          : bounds.y,
+    width,
+    height
+  });
+
+  if (options.aspectRatio && horizontal && vertical) {
+    const candidateX = bounds.width + widthDelta;
+    const candidateY = bounds.height + heightDelta;
+    const canSnapX = correctionX !== 0 && candidateX >= 8 && candidateX / options.aspectRatio >= 8;
+    const canSnapY = correctionY !== 0 && candidateY >= 8 && candidateY * options.aspectRatio >= 8;
+    if (
+      canSnapX &&
+      (!canSnapY || Math.abs(correctionX / thresholdX) <= Math.abs(correctionY / thresholdY))
+    ) {
+      return withSize(candidateX, candidateX / options.aspectRatio);
     }
+    if (canSnapY) return withSize(candidateY * options.aspectRatio, candidateY);
+    return bounds;
   }
-  if (handle.includes("s")) {
-    const correction = nearestEdgeCorrection([y + height], canvasHeight, thresholdY);
-    if (height + correction >= 8) height += correction;
-  } else if (handle.includes("n")) {
-    const correction = nearestEdgeCorrection([y], canvasHeight, thresholdY);
-    if (height - correction >= 8) {
-      y += correction;
-      height -= correction;
-    }
-  }
-  return { x, y, width, height };
+
+  return withSize(
+    bounds.width + widthDelta >= 8 ? bounds.width + widthDelta : bounds.width,
+    bounds.height + heightDelta >= 8 ? bounds.height + heightDelta : bounds.height
+  );
+}
+
+function activeSnapGuides(
+  before: Partial<OverlayElement>,
+  after: Partial<OverlayElement>,
+  canvasWidth: number,
+  canvasHeight: number
+): SnapGuides | null {
+  if (
+    before.x === undefined ||
+    before.y === undefined ||
+    before.width === undefined ||
+    before.height === undefined ||
+    after.x === undefined ||
+    after.y === undefined ||
+    after.width === undefined ||
+    after.height === undefined
+  )
+    return null;
+  const changedX = before.x !== after.x || before.width !== after.width;
+  const changedY = before.y !== after.y || before.height !== after.height;
+  const guides = {
+    left: changedX && Math.abs(after.x) < 0.000001,
+    right: changedX && Math.abs(after.x + after.width - canvasWidth) < 0.000001,
+    top: changedY && Math.abs(after.y) < 0.000001,
+    bottom: changedY && Math.abs(after.y + after.height - canvasHeight) < 0.000001
+  };
+  return Object.values(guides).some(Boolean) ? guides : null;
 }
 
 function WorkspaceZones() {
@@ -485,27 +704,17 @@ export function resizeElement(
     return { props: applyCrop(original, handle, dx, dy) };
   }
 
-  const fromCenter = event.ctrlKey || event.metaKey;
-  const preserveAspect = event.shiftKey && handle.length === 2;
+  const preserveAspect = !event.shiftKey && handle.length === 2;
   const minSize = 8;
-  const centerX = original.x + original.width / 2;
-  const centerY = original.y + original.height / 2;
   const hasWest = handle.includes("w");
   const hasEast = handle.includes("e");
   const hasNorth = handle.includes("n");
   const hasSouth = handle.includes("s");
 
-  let leftDelta = hasWest ? dx : 0;
-  let rightDelta = hasEast ? dx : 0;
-  let topDelta = hasNorth ? dy : 0;
-  let bottomDelta = hasSouth ? dy : 0;
-
-  if (fromCenter) {
-    leftDelta = hasWest ? dx : hasEast ? -dx : 0;
-    rightDelta = hasEast ? dx : hasWest ? -dx : 0;
-    topDelta = hasNorth ? dy : hasSouth ? -dy : 0;
-    bottomDelta = hasSouth ? dy : hasNorth ? -dy : 0;
-  }
+  const leftDelta = hasWest ? dx : 0;
+  const rightDelta = hasEast ? dx : 0;
+  const topDelta = hasNorth ? dy : 0;
+  const bottomDelta = hasSouth ? dy : 0;
 
   let x = original.x + leftDelta;
   let y = original.y + topDelta;
@@ -517,25 +726,24 @@ export function resizeElement(
     const widthChange = Math.abs(width / original.width - 1);
     const heightChange = Math.abs(height / original.height - 1);
     if (widthChange >= heightChange) {
-      height = Math.max(minSize, width / ratio);
+      width = Math.max(minSize, minSize * ratio, width);
+      height = width / ratio;
     } else {
-      width = Math.max(minSize, height * ratio);
+      height = Math.max(minSize, minSize / ratio, height);
+      width = height * ratio;
     }
 
-    if (fromCenter) {
-      x = centerX - width / 2;
-      y = centerY - height / 2;
-    } else {
-      x = hasWest ? original.x + original.width - width : original.x;
-      y = hasNorth ? original.y + original.height - height : original.y;
-    }
+    x = hasWest ? original.x + original.width - width : original.x;
+    y = hasNorth ? original.y + original.height - height : original.y;
   }
 
+  const scaledCrop = scaleCrop(original, width, height);
   return {
     x,
     y,
     width,
-    height
+    height,
+    ...(scaledCrop ? { props: scaledCrop } : {})
   };
 }
 
@@ -565,29 +773,22 @@ function applyCrop(
   next.bottom = clamp(next.bottom, 0, Math.max(0, original.height - 1 - next.top));
   return {
     ...original.props,
-    cropLeft: Math.round(next.left),
-    cropRight: Math.round(next.right),
-    cropTop: Math.round(next.top),
-    cropBottom: Math.round(next.bottom)
-  };
-}
-
-function getCrop(element: OverlayElement): {
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-} {
-  return {
-    left: getNumberProp(element.props, "cropLeft", 0),
-    right: getNumberProp(element.props, "cropRight", 0),
-    top: getNumberProp(element.props, "cropTop", 0),
-    bottom: getNumberProp(element.props, "cropBottom", 0)
+    cropLeft: next.left,
+    cropRight: next.right,
+    cropTop: next.top,
+    cropBottom: next.bottom
   };
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    Boolean(target.closest("input, textarea, select, [contenteditable=true], [role=dialog]"))
+  );
 }
 
 function SafeGuides() {
@@ -753,12 +954,8 @@ function buildCropStyle(element: OverlayElement): CSSProperties | undefined {
   if (crop.left === 0 && crop.right === 0 && crop.top === 0 && crop.bottom === 0) {
     return undefined;
   }
-  const top = (crop.top / Math.max(1, element.height)) * 100;
-  const right = (crop.right / Math.max(1, element.width)) * 100;
-  const bottom = (crop.bottom / Math.max(1, element.height)) * 100;
-  const left = (crop.left / Math.max(1, element.width)) * 100;
   return {
-    clipPath: `inset(${top}% ${right}% ${bottom}% ${left}%)`
+    clipPath: cropClipPath(crop, element.width, element.height)
   };
 }
 

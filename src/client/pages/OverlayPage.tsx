@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type { ElementTransform, OverlayElement, StreamerView } from "../../shared/types";
 import { CanvasStage } from "../components/CanvasStage";
+import { cropClipPath, getCrop } from "../cropGeometry";
 import { overlayMediaUrl } from "../overlayMediaUrl";
 import {
   isPlayableNode,
@@ -150,16 +151,7 @@ export function OverlayPage({ token }: { token: string }) {
       node.style.height = `${(element.height / defaultStreamer.canvasHeight) * 100}%`;
       const media = node.querySelector<HTMLElement>(".media-element");
       if (media) {
-        media.style.clipPath = cropClipPath(
-          {
-            left: Number(element.props.cropLeft) || 0,
-            right: Number(element.props.cropRight) || 0,
-            top: Number(element.props.cropTop) || 0,
-            bottom: Number(element.props.cropBottom) || 0
-          },
-          element.width,
-          element.height
-        );
+        media.style.clipPath = cropClipPath(getCrop(element), element.width, element.height);
       }
     }
   }, [displayElements]);
@@ -194,14 +186,6 @@ function getStageElement(id: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(
     `.stage-overlay [data-stage-element-id="${CSS.escape(id)}"]`
   );
-}
-
-function cropClipPath(
-  crop: NonNullable<ElementTransform["crop"]>,
-  width: number,
-  height: number
-): string {
-  return `inset(${(crop.top / height) * 100}% ${(crop.right / width) * 100}% ${(crop.bottom / height) * 100}% ${(crop.left / width) * 100}%)`;
 }
 
 function applyPlaybackCommand(

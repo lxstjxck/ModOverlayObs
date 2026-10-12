@@ -615,6 +615,47 @@ input[type="color"] {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
+.snap-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2000;
+}
+
+.snap-guide {
+  position: absolute;
+  background: #5ab6dc;
+  box-shadow: 0 0 4px #5ab6dc;
+}
+
+.snap-guide-left,
+.snap-guide-right {
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+
+.snap-guide-left {
+  left: 0;
+}
+.snap-guide-right {
+  right: 0;
+}
+
+.snap-guide-top,
+.snap-guide-bottom {
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.snap-guide-top {
+  top: 0;
+}
+.snap-guide-bottom {
+  bottom: 0;
+}
+
 .canvas-zone {
   position: absolute;
   pointer-events: none;

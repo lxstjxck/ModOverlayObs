@@ -14,6 +14,7 @@ import {
 } from "../mediaPlayback";
 import { isPlayableMedia, isText } from "../utils";
 import { formatMediaPosition, parseMediaPosition } from "../mediaPosition";
+import { scaleCrop } from "../cropGeometry";
 
 interface PropertiesPanelProps {
   selected: OverlayElement | null;
@@ -93,6 +94,45 @@ export function PropertiesPanel({
         </>
       )}
 
+      <div className="grid-fields">
+        <NumberField
+          label="X"
+          value={selected.x}
+          focusTransform
+          onChange={(x) => update({ x: Math.max(-10000, Math.min(10000, x)) })}
+        />
+        <NumberField
+          label="Y"
+          value={selected.y}
+          onChange={(y) => update({ y: Math.max(-10000, Math.min(10000, y)) })}
+        />
+      </div>
+      <div className="grid-fields">
+        <NumberField
+          label="W"
+          value={selected.width}
+          onChange={(value) => {
+            const width = Math.max(8, Math.min(10000, value));
+            const props = scaleCrop(selected, width, selected.height);
+            update({
+              width,
+              ...(props ? { props } : {})
+            });
+          }}
+        />
+        <NumberField
+          label="H"
+          value={selected.height}
+          onChange={(value) => {
+            const height = Math.max(8, Math.min(10000, value));
+            const props = scaleCrop(selected, selected.width, height);
+            update({
+              height,
+              ...(props ? { props } : {})
+            });
+          }}
+        />
+      </div>
       <div className="grid-fields">
         <NumberField
           label="Rot"
@@ -439,17 +479,20 @@ function MediaControls({
 function NumberField({
   label,
   value,
-  onChange
+  onChange,
+  focusTransform
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  focusTransform?: boolean;
 }) {
   return (
     <label className="field">
       {label}
       <input
         type="number"
+        data-transform-focus={focusTransform ? "true" : undefined}
         value={Number.isFinite(value) ? value : 0}
         onChange={(event) => onChange(Number(event.target.value))}
       />

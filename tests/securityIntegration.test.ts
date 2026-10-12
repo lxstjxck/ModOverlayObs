@@ -656,6 +656,75 @@ describe("realtime access revocation", () => {
     expect((await restored).find((item) => item.id === element.id)?.x).toBe(900);
   });
 
+  it("keeps cropped resize identical in preview, OBS, and persisted state", async () => {
+    const element = await prisma.previewElement.create({
+      data: {
+        streamerId,
+        type: "IMAGE",
+        name: "crop",
+        width: 200,
+        height: 100,
+        propsJson: JSON.stringify({ cropLeft: 50, cropTop: 25 })
+      }
+    });
+    const moderator = await socketClient({ session: "owner-session" });
+    const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const crop = { left: 100, right: 0, top: 50, bottom: 0 };
+    const moving = event<{ width: number; height: number; crop: typeof crop }>(
+      overlay,
+      "overlay:transform"
+    );
+    moderator.emit("preview:transform", { id: element.id, width: 400, height: 200, crop });
+    expect(await moving).toMatchObject({ id: element.id, width: 400, height: 200, crop });
+    expect(
+      await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })
+    ).toMatchObject({
+      width: 200,
+      height: 100,
+      propsJson: JSON.stringify({ cropLeft: 50, cropTop: 25 })
+    });
+
+    const previewState = event<
+      Array<{ id: string; width: number; props: Record<string, unknown> }>
+    >(moderator, "preview:state");
+    const overlayState = event<
+      Array<{ id: string; width: number; props: Record<string, unknown> }>
+    >(overlay, "overlay:state");
+    expect(
+      await moderator.timeout(3000).emitWithAck("preview:update", {
+        id: element.id,
+        patch: {
+          width: 400,
+          height: 200,
+          props: { cropLeft: 100, cropRight: 0, cropTop: 50, cropBottom: 0 }
+        }
+      })
+    ).toBe(true);
+    const preview = (await previewState).find((item) => item.id === element.id);
+    const obs = (await overlayState).find((item) => item.id === element.id);
+    expect(preview).toMatchObject({ width: 400, props: { cropLeft: 100, cropTop: 50 } });
+    expect(obs).toEqual(preview);
+    expect(
+      await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })
+    ).toMatchObject({
+      width: 400,
+      height: 200
+    });
+    const reconnected = connect(baseUrl, {
+      transports: ["websocket"],
+      reconnection: false,
+      autoConnect: false,
+      query: { overlayToken: "overlay-old" }
+    });
+    clients.push(reconnected);
+    const restored = event<Array<{ id: string; width: number; props: Record<string, unknown> }>>(
+      reconnected,
+      "overlay:state"
+    );
+    reconnected.connect();
+    expect((await restored).find((item) => item.id === element.id)).toEqual(obs);
+  });
+
   it("rejects unauthorized, unknown, and invalid transforms", async () => {
     const element = await prisma.previewElement.create({
       data: { streamerId, type: "TEXT", name: "drag", text: "drag" }
