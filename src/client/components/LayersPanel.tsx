@@ -20,36 +20,34 @@ export function LayersPanel({ title, elements, selectedId, onSelect, onToggle }:
         {sortElements(elements)
           .reverse()
           .map((element) => (
-            <button
+            <div
               key={element.id}
               className={`layer-row ${selectedId === element.id ? "active" : ""}`}
-              type="button"
-              onClick={() => onSelect(element.id)}
             >
-              {element.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-              <span>{element.name}</span>
+              <button
+                type="button"
+                className="layer-select"
+                onClick={() => onSelect(element.id)}
+                aria-label={`Выбрать ${element.name}`}
+              >
+                {element.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                <span>{element.name}</span>
+              </button>
               {onToggle && (
-                <span
+                <button
                   className="layer-toggle"
-                  role="button"
-                  tabIndex={0}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onToggle(element.id, !element.visible);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      onToggle(element.id, !element.visible);
-                    }
-                  }}
+                  type="button"
+                  aria-label={`${element.visible ? "Скрыть" : "Показать"} ${element.name}`}
+                  onClick={() => onToggle(element.id, !element.visible)}
                 >
                   {element.visible ? "on" : "off"}
-                </span>
+                </button>
               )}
-            </button>
+            </div>
           ))}
-        {elements.length === 0 && <div className="empty-list">No layers</div>}
+        {elements.length === 0 && (
+          <div className="empty-list">Слои появятся после добавления объектов</div>
+        )}
       </div>
     </section>
   );

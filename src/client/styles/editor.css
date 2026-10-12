@@ -1,0 +1,594 @@
+/* Editor treatment. OBS rendering keeps the unmodified CanvasStage overlay styles. */
+.moderator-app {
+  --console-bg: var(--ui-bg);
+  --console-panel: var(--ui-surface);
+  --console-raised: var(--ui-surface-raised);
+  --console-line: var(--ui-border);
+  --console-muted: var(--ui-muted);
+  --console-text: var(--ui-ink);
+  --console-accent: var(--ui-accent);
+  --console-soft: #c9c3d4;
+  --console-red: #e787a2;
+  min-width: 0;
+  background: var(--ui-bg);
+  color: var(--ui-ink);
+  font-family: var(--ui-font);
+}
+.moderator-app * {
+  box-sizing: border-box;
+}
+.moderator-app :is(button, input, select, textarea) {
+  font-family: inherit;
+}
+.moderator-app :is(button, input, select, textarea, summary):focus-visible,
+.moderator-app .media-drop-zone:focus-within {
+  outline: 2px solid var(--ui-accent-strong);
+  outline-offset: 2px;
+}
+.moderator-app button {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-raised);
+  color: var(--ui-ink);
+}
+.moderator-app button:hover:not(:disabled) {
+  border-color: var(--ui-border-accent);
+  background: #272330;
+}
+.moderator-app button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.moderator-app :is(input, select, textarea) {
+  min-width: 0;
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: #0c0c10;
+  color: var(--ui-ink);
+}
+.moderator-app :is(input, textarea)::placeholder {
+  color: #85808e;
+}
+.moderator-app .topbar {
+  min-height: 66px;
+  padding: 8px 18px;
+  border-bottom-color: var(--ui-border);
+  background: #0e0d12;
+  box-shadow: none;
+}
+.moderator-app .topbar-brand {
+  min-width: auto;
+  margin-right: 16px;
+}
+.moderator-app .brand-symbol {
+  width: 38px;
+  height: 38px;
+  border-color: var(--ui-border-accent);
+  border-radius: var(--ui-radius-sm);
+  background: #211a2d;
+  color: var(--ui-accent);
+  box-shadow: 0 0 20px #b8a7f026;
+}
+.moderator-app .brand-copy strong {
+  letter-spacing: -0.035em;
+}
+.moderator-app .brand-copy strong span {
+  color: var(--ui-accent);
+}
+.moderator-app .brand-copy small {
+  color: var(--ui-muted);
+  letter-spacing: 0.08em;
+}
+.moderator-app .editor-channel {
+  display: grid;
+  gap: 1px;
+  min-width: 120px;
+  max-width: 240px;
+  padding-left: 18px;
+  border-left: 1px solid var(--ui-border);
+}
+.moderator-app .editor-channel-label {
+  color: var(--ui-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+.moderator-app .editor-channel strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.moderator-app .topbar-status {
+  margin-left: auto;
+}
+.moderator-app .topbar-tools {
+  margin-left: 6px;
+}
+.moderator-app .presence {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-pill);
+  background: var(--ui-surface);
+}
+.moderator-app .presence-copy strong {
+  color: var(--ui-ink);
+  font-size: 10px;
+}
+.moderator-app .presence.online .status-light {
+  background: var(--ui-accent);
+  box-shadow: 0 0 10px #b8a7f07a;
+}
+.moderator-app .obs-presence.offline .presence-copy strong,
+.moderator-app .server-presence.offline .presence-copy strong {
+  color: #e9a4b5;
+}
+.moderator-app .setup-link {
+  border-color: var(--ui-border-accent);
+  color: var(--ui-accent-strong);
+}
+.moderator-app .editor-add-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #17131e;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.moderator-app .editor-add-text:hover:not(:disabled) {
+  border-color: var(--ui-accent-strong);
+  background: var(--ui-accent-strong);
+  color: #17131e;
+}
+.moderator-app .workspace {
+  grid-template-columns: minmax(260px, 290px) minmax(0, 1fr) minmax(250px, 275px);
+  background: var(--ui-border);
+}
+.moderator-app .asset-sidebar,
+.moderator-app .media-library,
+.moderator-app .emotes-panel,
+.moderator-app .properties-panel {
+  background: var(--ui-surface);
+}
+.moderator-app .sidebar-heading {
+  border-color: var(--ui-border);
+  color: var(--ui-ink);
+  letter-spacing: 0.11em;
+}
+.moderator-app :is(.sidebar-heading span, .section-index) {
+  color: var(--ui-accent);
+}
+.moderator-app .asset-tabs {
+  border-color: var(--ui-border);
+}
+.moderator-app .asset-tabs button {
+  border-radius: var(--ui-radius-sm);
+}
+.moderator-app .asset-tabs button.active {
+  border-color: var(--ui-border-accent);
+  background: #30283f;
+  color: var(--ui-accent-strong);
+}
+.moderator-app .panel-title {
+  color: var(--ui-ink);
+  letter-spacing: 0.07em;
+}
+.moderator-app .media-drop-zone {
+  min-height: 74px;
+  border: 1px dashed var(--ui-border-accent);
+  border-radius: var(--ui-radius-sm);
+  background: #1c1825;
+  color: #d8d1e7;
+  line-height: 1.45;
+}
+.moderator-app .media-drop-zone:hover,
+.moderator-app .media-drop-zone:focus-within {
+  border-color: var(--ui-accent);
+  background: #292135;
+}
+.moderator-app .media-drop-zone input:focus-visible {
+  outline: none;
+}
+.moderator-app .text-tool {
+  border-color: var(--ui-border-accent);
+  color: var(--ui-accent-strong);
+}
+.moderator-app .url-tool {
+  margin-bottom: 10px;
+}
+.moderator-app .url-tool button {
+  border-color: var(--ui-border-accent);
+  color: var(--ui-accent);
+}
+.moderator-app .media-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 105px;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.moderator-app .media-search {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding-left: 9px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: #0c0c10;
+  color: var(--ui-muted);
+}
+.moderator-app .media-search:focus-within {
+  border-color: var(--ui-border-accent);
+}
+.moderator-app .media-search input {
+  width: 100%;
+  min-height: 38px;
+  padding: 4px 5px;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+}
+.moderator-app .media-filter-bar select {
+  width: 100%;
+  min-height: 38px;
+  padding: 5px;
+  font-size: 11px;
+}
+.moderator-app .media-inline-error {
+  margin: 0 0 10px;
+  color: #f2a9ba;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.moderator-app .media-inline-status {
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+.moderator-app .media-row {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: #17151d;
+}
+.moderator-app .media-row:hover {
+  border-color: var(--ui-border-accent);
+}
+.moderator-app .media-row:has(.media-select:checked) {
+  border-color: var(--ui-accent);
+  background: #211b2c;
+}
+.moderator-app .media-thumb {
+  border-radius: 7px;
+  background: #0b0b0e;
+  color: var(--ui-accent);
+}
+.moderator-app .media-meta strong {
+  font-size: 11px;
+}
+.moderator-app .media-meta span {
+  font-size: 10px;
+}
+.moderator-app .media-select {
+  accent-color: var(--ui-accent);
+}
+.moderator-app .media-list .empty-list,
+.moderator-app .properties-panel .empty-list {
+  padding: 20px 10px;
+  border: 1px dashed var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  line-height: 1.6;
+}
+.moderator-app .emotes-panel > input {
+  min-height: 38px;
+  padding: 8px;
+}
+.moderator-app .emote-channel,
+.moderator-app .emote-custom-form {
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+  background: #15131a;
+}
+.moderator-app .emote-channel input,
+.moderator-app .emote-custom-form input {
+  min-height: 36px;
+  padding: 7px;
+}
+.moderator-app .emote-section {
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-border);
+}
+.moderator-app .emote-section h3 {
+  color: var(--ui-accent-strong);
+}
+.moderator-app .emote-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.moderator-app .emote-item > button:first-child {
+  min-height: 78px;
+  background: #18151e;
+  border: 1px solid var(--ui-border);
+}
+.moderator-app .emote-item > button:first-child:hover {
+  border-color: var(--ui-border-accent);
+}
+.moderator-app .emote-item img {
+  width: 40px;
+  height: 40px;
+}
+.moderator-app .emote-delete {
+  border-color: #764d60;
+  color: #ffd0dc;
+}
+.moderator-app .workspace-center {
+  padding: 12px 14px 8px;
+  background: var(--ui-bg);
+}
+.moderator-app .workspace-heading {
+  padding: 2px 2px 12px;
+}
+.moderator-app .workspace-heading h1 {
+  color: var(--ui-ink);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+.moderator-app .canvas-resolution {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-pill);
+  color: var(--ui-muted);
+}
+.moderator-app .stage-shell {
+  border-color: var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: #111016;
+  box-shadow: 0 20px 50px #0005;
+}
+.moderator-app .stage-scroll {
+  background-color: #0e0d12;
+  background-image:
+    linear-gradient(#b8a7f00b 1px, transparent 1px),
+    linear-gradient(90deg, #b8a7f00b 1px, transparent 1px);
+}
+.moderator-app .stage-surface {
+  outline: 2px solid var(--ui-accent);
+  background: #b8a7f00b;
+  box-shadow:
+    0 0 0 1px #d2c5ff85,
+    0 0 35px #b8a7f026;
+}
+.moderator-app .live-zone {
+  background: #b8a7f00b;
+}
+.moderator-app .spawn-zone,
+.moderator-app .stage-zone {
+  border-color: #746988;
+  background: #b8a7f006;
+}
+.moderator-app .spawn-zone span,
+.moderator-app .stage-zone span {
+  color: #c8b9e7;
+}
+.moderator-app .stage-element.selected {
+  outline-color: var(--ui-accent-strong);
+}
+.moderator-app .resize-handle {
+  border-color: var(--ui-accent-strong);
+  background: #211b2c;
+}
+.moderator-app .snap-guide {
+  background: var(--ui-accent-strong);
+  box-shadow: 0 0 4px var(--ui-accent);
+}
+.moderator-app .stage-zoom-controls {
+  flex-wrap: wrap;
+  max-width: calc(100% - 24px);
+  border-color: var(--ui-border-accent);
+  border-radius: var(--ui-radius-sm);
+  background: #101014ed;
+}
+.moderator-app .stage-zoom-controls button {
+  border-color: var(--ui-border);
+  border-radius: 6px;
+  background: #201b29;
+}
+.moderator-app .workspace-caption {
+  color: var(--ui-muted);
+  white-space: normal;
+}
+.moderator-app .caption-key.live {
+  background: var(--ui-accent);
+}
+.moderator-app .caption-key.spawn {
+  background: #746988;
+}
+.moderator-app .properties-panel {
+  padding: 16px;
+}
+.moderator-app .properties-panel > .panel-title::before {
+  color: var(--ui-accent);
+}
+.moderator-app .properties-panel .field {
+  color: #c6c0d0;
+}
+.moderator-app .properties-panel input[type="range"]::-webkit-slider-thumb {
+  background: var(--ui-accent);
+}
+.moderator-app .properties-panel input[type="range"]::-moz-range-thumb {
+  background: var(--ui-accent);
+}
+.moderator-app .action-stack button {
+  justify-content: flex-start;
+}
+.moderator-app .bottom-panels {
+  border-color: var(--ui-border);
+  background: #0e0d12;
+}
+.moderator-app .bottom-panels summary {
+  color: var(--ui-muted);
+}
+.moderator-app .bottom-panels summary span {
+  color: var(--ui-accent);
+}
+.moderator-app .layer-row.active {
+  border-color: var(--ui-border-accent);
+  background: #251f30;
+}
+.moderator-app .layer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-sm);
+}
+.moderator-app .layer-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.moderator-app .layer-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.moderator-app .layer-toggle {
+  min-height: 30px;
+  padding-inline: 9px;
+  color: var(--ui-accent-strong);
+}
+.moderator-app .media-delete-dialog {
+  border-color: var(--ui-border-accent);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-raised);
+  color: var(--ui-ink);
+}
+@media (max-width: 1450px) {
+  .moderator-app .topbar {
+    flex-wrap: nowrap;
+  }
+  .moderator-app .account-presence {
+    display: none;
+  }
+}
+@media (max-width: 1180px) {
+  .moderator-app .workspace {
+    grid-template-columns: 260px minmax(0, 1fr);
+  }
+  .moderator-app .properties-panel {
+    grid-column: 1 / -1;
+    max-height: 310px;
+    border-top: 1px solid var(--ui-border);
+  }
+}
+@media (max-width: 820px) {
+  .moderator-app {
+    height: auto;
+    min-height: 100%;
+  }
+  .moderator-app .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .moderator-app .topbar-brand {
+    width: auto;
+    margin-right: 0;
+  }
+  .moderator-app .editor-channel {
+    flex: 1;
+    min-width: 0;
+  }
+  .moderator-app .topbar-status {
+    width: 100%;
+    margin-left: 0;
+  }
+  .moderator-app .topbar-tools {
+    width: 100%;
+    margin-left: 0;
+  }
+  .moderator-app .workspace {
+    display: flex;
+    flex-direction: column;
+  }
+  .moderator-app .workspace-center {
+    order: 0;
+    min-height: 470px;
+    padding: 12px;
+  }
+  .moderator-app .asset-sidebar {
+    order: 1;
+    max-height: none;
+    min-height: 390px;
+    border-top: 1px solid var(--ui-border);
+  }
+  .moderator-app .asset-tab-content {
+    max-height: 520px;
+    overflow: auto;
+  }
+  .moderator-app .properties-panel {
+    order: 2;
+    max-height: none;
+    border-top: 1px solid var(--ui-border);
+  }
+  .moderator-app .stage-shell {
+    min-height: 360px;
+  }
+  .moderator-app .workspace-caption {
+    gap: 8px 14px;
+    padding-top: 10px;
+  }
+  .moderator-app .emote-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 440px) {
+  .moderator-app .brand-copy small {
+    display: none;
+  }
+  .moderator-app .editor-channel {
+    padding-left: 10px;
+  }
+  .moderator-app .server-presence,
+  .moderator-app .obs-presence {
+    flex: 1;
+    justify-content: center;
+  }
+  .moderator-app .setup-link {
+    flex: 1;
+    justify-content: center;
+  }
+  .moderator-app .workspace-heading {
+    flex-wrap: wrap;
+  }
+  .moderator-app .workspace-center {
+    min-height: 480px;
+  }
+  .moderator-app .stage-zoom-controls {
+    top: 8px;
+    right: 8px;
+    padding: 4px;
+  }
+  .moderator-app .stage-zoom-controls span {
+    display: none;
+  }
+  .moderator-app .stage-zoom-controls button {
+    min-width: 34px;
+    padding: 4px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .moderator-app :is(button, .media-row) {
+    transition: none;
+    scroll-behavior: auto;
+  }
+}

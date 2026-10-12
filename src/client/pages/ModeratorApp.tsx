@@ -1,4 +1,12 @@
-import { AlertTriangle, ClipboardList, LogOut, Monitor, RefreshCw, UserRound } from "lucide-react";
+import {
+  AlertTriangle,
+  ClipboardList,
+  LogOut,
+  Monitor,
+  RefreshCw,
+  Type,
+  UserRound
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import type {
@@ -21,7 +29,7 @@ import { MediaLibrary } from "../components/MediaLibrary";
 import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
 import { reconcilePreview } from "../previewSync";
-import { readMediaDimensions } from "../mediaDimensions";
+import { fitInitialMediaDimensions, readMediaDimensions } from "../mediaDimensions";
 import { layerOrderPatches, reversePatch, transformCommand } from "../canvasCommands";
 
 type HistoryChange = {
@@ -44,6 +52,9 @@ export function ModeratorApp() {
   const [user, setUser] = useState<UserView | null>(null);
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [mediaLoading, setMediaLoading] = useState(true);
+  const [uploadingCount, setUploadingCount] = useState(0);
+  const [connected, setConnected] = useState(false);
   const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
   const [emotesOpened, setEmotesOpened] = useState(false);
   const [preview, setPreview] = useState<OverlayElement[]>([]);
@@ -54,6 +65,7 @@ export function ModeratorApp() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [mediaError, setMediaError] = useState("");
   const [mediaDeleteIds, setMediaDeleteIds] = useState<string[]>([]);
   const [deletingMedia, setDeletingMedia] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -83,11 +95,33 @@ export function ModeratorApp() {
         setUser(me.user);
         setStreamer(me.streamer);
         canvasRevisionRef.current = me.streamer.canvasRevision;
-        const mediaResult = await api<MediaResponse>("/api/media");
-        setMedia(mediaResult.media);
+        try {
+          const mediaResult = await api<MediaResponse>("/api/media");
+          if (!cancelled) setMedia(mediaResult.media);
+        } catch (mediaLoadError) {
+          if (
+            mediaLoadError instanceof ApiError &&
+            (mediaLoadError.status === 401 || mediaLoadError.status === 403)
+          )
+            throw mediaLoadError;
+          if (!cancelled)
+            setMediaError(
+              mediaLoadError instanceof Error
+                ? mediaLoadError.message
+                : "Не удалось загрузить медиа"
+            );
+        } finally {
+          if (!cancelled) setMediaLoading(false);
+        }
       } catch (bootError) {
-        if (bootError instanceof ApiError && (bootError.status === 401 || (bootError.status === 403 && window.location.pathname.startsWith("/channel/")))) {
-          window.location.href = window.location.pathname.startsWith("/channel/") ? "/channels" : "/login";
+        if (
+          bootError instanceof ApiError &&
+          (bootError.status === 401 ||
+            (bootError.status === 403 && window.location.pathname.startsWith("/channel/")))
+        ) {
+          window.location.href = window.location.pathname.startsWith("/channel/")
+            ? "/channels"
+            : "/login";
           return;
         }
         setError(bootError instanceof Error ? bootError.message : "Could not load app");
@@ -104,7 +138,10 @@ export function ModeratorApp() {
       return undefined;
     }
     const channelId = /^\/channel\/([^/]+)$/.exec(window.location.pathname)?.[1];
-    const socket = io({ path: "/socket.io", query: channelId ? { channelId: decodeURIComponent(channelId) } : undefined });
+    const socket = io({
+      path: "/socket.io",
+      query: channelId ? { channelId: decodeURIComponent(channelId) } : undefined
+    });
     socketRef.current = socket;
     socket.on("canvas:state", (value: StreamerView) => {
       if (canvasRevisionRef.current !== value.canvasRevision) {
@@ -123,7 +160,11 @@ export function ModeratorApp() {
       setStreamer(value);
     });
     socket.on("access:revoked", () => {
-      window.location.href = channelId ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/login";
+      window.location.href = channelId
+        ? user.role === "OWNER"
+          ? "/streamer"
+          : "/channels"
+        : "/login";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
       canvasRefreshPending.current = false;
@@ -168,6 +209,7 @@ export function ModeratorApp() {
       );
     });
     socket.on("disconnect", () => {
+      setConnected(false);
       history.current = { undo: [], redo: [] };
       for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
       previewPatchTimers.current.clear();
@@ -177,6 +219,14 @@ export function ModeratorApp() {
       for (const timer of transformTimers.current.values()) window.clearTimeout(timer);
       transformTimers.current.clear();
       setError("Connection lost. Reconnecting; unconfirmed changes may not have been saved.");
+    });
+    socket.on("connect", () => {
+      setConnected(true);
+      setError((current) =>
+        current.startsWith("Connection lost.") || current.startsWith("Нет соединения с сервером.")
+          ? ""
+          : current
+      );
     });
     socket.on("presence:update", (state: PresenceState) => setPresence(state));
     socket.on("app:error", (message: string) => setError(message));
@@ -334,7 +384,14 @@ export function ModeratorApp() {
   if (!user || !streamer) {
     return (
       <main className="loading-page">
-        {error ? <div className="error-box">{error}</div> : <><RefreshCw className="spin" size={24} />Загружаем LXST Overlay</>}
+        {error ? (
+          <div className="error-box">{error}</div>
+        ) : (
+          <>
+            <RefreshCw className="spin" size={24} />
+            Загружаем LXST Overlay
+          </>
+        )}
       </main>
     );
   }
@@ -347,7 +404,12 @@ export function ModeratorApp() {
   async function addMediaToCanvas(item: MediaItem) {
     try {
       const dimensions = await readMediaDimensions(item);
-      emit("preview:add", { mediaId: item.id, ...dimensions });
+      emit("preview:add", {
+        mediaId: item.id,
+        ...(dimensions && streamer
+          ? fitInitialMediaDimensions(dimensions, streamer.canvasWidth, streamer.canvasHeight)
+          : {})
+      });
     } catch (sizeError) {
       setError(sizeError instanceof Error ? sizeError.message : "Could not read media dimensions");
     }
@@ -355,9 +417,11 @@ export function ModeratorApp() {
 
   async function uploadFiles(files: FileList | File[], addToCanvas = false) {
     setError("");
+    setMediaError("");
     for (const file of Array.from(files)) {
       const data = new FormData();
       data.append("file", file);
+      setUploadingCount((count) => count + 1);
       try {
         const result = await api<{ media: MediaItem }>("/api/media", {
           method: "POST",
@@ -368,7 +432,12 @@ export function ModeratorApp() {
           await addMediaToCanvas(result.media);
         }
       } catch (uploadError) {
-        setError(uploadError instanceof Error ? uploadError.message : "Upload failed");
+        const message =
+          uploadError instanceof Error ? uploadError.message : "Не удалось загрузить файл";
+        setError(message);
+        setMediaError(message);
+      } finally {
+        setUploadingCount((count) => count - 1);
       }
     }
   }
@@ -379,6 +448,7 @@ export function ModeratorApp() {
     name?: string;
   }): Promise<boolean> {
     setError("");
+    setMediaError("");
     try {
       const result = await api<{ media: MediaItem }>("/api/media/url", {
         method: "POST",
@@ -388,7 +458,9 @@ export function ModeratorApp() {
       await addMediaToCanvas(result.media);
       return true;
     } catch (urlError) {
-      setError(urlError instanceof Error ? urlError.message : "Could not add media URL");
+      const message = urlError instanceof Error ? urlError.message : "Не удалось добавить ссылку";
+      setError(message);
+      setMediaError(message);
       return false;
     }
   }
@@ -398,8 +470,16 @@ export function ModeratorApp() {
       setError("Canvas editing requires permission to edit and control the live overlay.");
       return;
     }
+    if (event.startsWith("preview:") && !socketRef.current?.connected) {
+      setError("Нет соединения с сервером. Дождитесь восстановления перед изменением холста.");
+      return;
+    }
     if (canvasRefreshPending.current) return;
-    if (["preview:add", "preview:duplicate", "preview:remove"].includes(event) && payload && typeof payload === "object") {
+    if (
+      ["preview:add", "preview:duplicate", "preview:remove"].includes(event) &&
+      payload &&
+      typeof payload === "object"
+    ) {
       socketRef.current?.emit(event, { ...payload, revision: canvasRevisionRef.current });
     } else socketRef.current?.emit(event, payload);
   }
@@ -549,17 +629,21 @@ export function ModeratorApp() {
         inFlightPreviewPatches.current.set(id, nextPatch);
         socket
           .timeout(10000)
-          .emit("preview:update", { id, patch: nextPatch, revision: canvasRevisionRef.current }, (error: Error | null, ok: boolean) => {
-            if (inFlightPreviewPatches.current.get(id) !== nextPatch) return;
-            inFlightPreviewPatches.current.delete(id);
-            if (error || !ok) {
-              // Reload canonical state instead of silently keeping rejected optimistic edits.
-              socket.disconnect().connect();
-              setError("Could not save changes. Reloading canvas from the server.");
-              return;
+          .emit(
+            "preview:update",
+            { id, patch: nextPatch, revision: canvasRevisionRef.current },
+            (error: Error | null, ok: boolean) => {
+              if (inFlightPreviewPatches.current.get(id) !== nextPatch) return;
+              inFlightPreviewPatches.current.delete(id);
+              if (error || !ok) {
+                // Reload canonical state instead of silently keeping rejected optimistic edits.
+                socket.disconnect().connect();
+                setError("Could not save changes. Reloading canvas from the server.");
+                return;
+              }
+              if (pendingPreviewPatches.current.has(id)) schedulePreviewFlush(id);
             }
-            if (pendingPreviewPatches.current.has(id)) schedulePreviewFlush(id);
-          });
+          );
       }
     }, delay);
     previewPatchTimers.current.set(id, timer);
@@ -625,7 +709,17 @@ export function ModeratorApp() {
             </small>
           </span>
         </div>
+        <div className="editor-channel" title={streamer.displayName}>
+          <span className="editor-channel-label">КАНАЛ</span>
+          <strong>{streamer.displayName}</strong>
+        </div>
         <div className="topbar-status">
+          <div className={`presence server-presence ${connected ? "online" : "offline"}`}>
+            <span className="status-light" aria-hidden="true" />
+            <span className="presence-copy">
+              <strong>СЕРВЕР {connected ? "ОНЛАЙН" : "ОФЛАЙН"}</strong>
+            </span>
+          </div>
           <div
             className={`presence obs-presence ${presence.overlayConnected ? "online" : "offline"}`}
           >
@@ -646,9 +740,23 @@ export function ModeratorApp() {
         </div>
         <div className="topbar-tools">
           <button
+            className="editor-add-text"
+            type="button"
+            disabled={!canEditCanvas || !connected}
+            onClick={() => emit("preview:add", { type: "TEXT", text: "New text" })}
+          >
+            <Type size={16} aria-hidden="true" /> Добавить текст
+          </button>
+          <button
             className="setup-link"
             type="button"
-            onClick={() => (window.location.href = window.location.pathname.startsWith("/channel/") ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup")}
+            onClick={() =>
+              (window.location.href = window.location.pathname.startsWith("/channel/")
+                ? user.role === "OWNER"
+                  ? "/streamer"
+                  : "/channels"
+                : "/obs-setup")
+            }
           >
             <ClipboardList size={16} />
             {window.location.pathname.startsWith("/channel/") ? "К списку каналов" : "OBS Setup"}
@@ -702,6 +810,10 @@ export function ModeratorApp() {
           <div className="asset-tab-content" hidden={assetTab !== "media"}>
             <MediaLibrary
               media={media}
+              loading={mediaLoading}
+              uploadingCount={uploadingCount}
+              error={mediaError}
+              canPlace={canEditCanvas && connected}
               onUpload={(files) => void uploadFiles(files)}
               onAdd={(mediaId) => {
                 const item = media.find((entry) => entry.id === mediaId);
@@ -724,6 +836,7 @@ export function ModeratorApp() {
                 canConfigure={permissions?.canEditPreview ?? false}
                 canCreate={permissions?.canUploadImage ?? false}
                 canDelete={permissions?.canDeleteMedia ?? false}
+                canPlace={canEditCanvas && connected}
               />
             </div>
           )}
@@ -733,7 +846,7 @@ export function ModeratorApp() {
           <div className="workspace-heading">
             <div>
               <span className="section-index">02 / COMPOSITION</span>
-              <h1>Canvas workspace</h1>
+              <h1>Рабочая область</h1>
             </div>
             <span className="canvas-resolution">
               <Monitor size={14} /> OBS {streamer.canvasWidth} × {streamer.canvasHeight}
@@ -751,10 +864,10 @@ export function ModeratorApp() {
           />
           <div className="workspace-caption">
             <span>
-              <i className="caption-key live" /> RED FRAME · OBS OUTPUT
+              <i className="caption-key live" /> OBS CANVAS · ЭФИР
             </span>
             <span>
-              <i className="caption-key spawn" /> SPAWN · STAGING
+              <i className="caption-key spawn" /> ЗА ПРЕДЕЛАМИ · ПОДГОТОВКА
             </span>
             <span className="workspace-caption-note">
               Колесо — масштаб · Space + перетаскивание — обзор

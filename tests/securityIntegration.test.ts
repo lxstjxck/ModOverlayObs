@@ -154,6 +154,30 @@ it("uses validated intrinsic dimensions for a new preview without changing live 
   expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
 });
 
+it("adds a large video at the fitted preview size without changing its source metadata", async () => {
+  const media = await prisma.media.create({
+    data: {
+      streamerId,
+      filename: "clip.mp4",
+      originalName: "clip.mp4",
+      mimeType: "video/mp4",
+      type: "VIDEO",
+      size: 1024,
+      url: "https://cdn.example.com/clip.mp4",
+      width: 3840,
+      height: 2160
+    }
+  });
+  const socket = await socketClient({ session: "owner-session" });
+  const state = event<Array<{ mediaId: string; type: string; x: number; width: number; height: number }>>(
+    socket, "preview:state"
+  );
+  socket.emit("preview:add", { mediaId: media.id, width: 512, height: 288 });
+  expect((await state)[0]).toMatchObject({ mediaId: media.id, type: "VIDEO", x: -568, width: 512, height: 288 });
+  expect(await prisma.media.findUniqueOrThrow({ where: { id: media.id } })).toMatchObject({ width: 3840, height: 2160 });
+  expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
+});
+
 async function files() {
   const entries = await fs.readdir(config.uploadDir);
   const temporary = await fs.readdir(path.join(config.uploadDir, ".tmp"));

@@ -6,6 +6,7 @@ import "./broadcastConsole.css";
 import "./styles/tokens.css";
 import "./styles/landing.css";
 import "./styles/workspace.css";
+import "./styles/editor.css";
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>

@@ -10,6 +10,7 @@ interface Props {
   canConfigure: boolean;
   canCreate: boolean;
   canDelete: boolean;
+  canPlace: boolean;
 }
 
 const empty: ChannelEmotesResponse = { twitch: [], sevenTv: [], custom: [], errors: {} };
@@ -20,7 +21,8 @@ export function EmotesPanel({
   onAdd,
   canConfigure,
   canCreate,
-  canDelete
+  canDelete,
+  canPlace
 }: Props) {
   const [data, setData] = useState(empty);
   const [query, setQuery] = useState("");
@@ -30,6 +32,9 @@ export function EmotesPanel({
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   async function reload(refresh = false) {
     setLoading(true);
@@ -65,6 +70,7 @@ export function EmotesPanel({
   }, [data, query]);
 
   async function saveChannel() {
+    setSaving(true);
     try {
       const result = await api<{ streamer: StreamerView }>("/api/streamer/twitch", {
         method: "PATCH",
@@ -74,10 +80,13 @@ export function EmotesPanel({
       await reload();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save channel");
+    } finally {
+      setSaving(false);
     }
   }
 
   async function addCustom() {
+    setCreating(true);
     try {
       const result = await api<{ emote: ChannelEmote }>("/api/emotes/custom", {
         method: "POST",
@@ -89,10 +98,13 @@ export function EmotesPanel({
       setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not add emote");
+    } finally {
+      setCreating(false);
     }
   }
 
   async function deleteCustom(id: string) {
+    setDeletingId(id);
     try {
       await api(`/api/emotes/custom/${encodeURIComponent(id)}`, { method: "DELETE" });
       setData((current) => ({
@@ -101,6 +113,8 @@ export function EmotesPanel({
       }));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not delete emote");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -110,14 +124,20 @@ export function EmotesPanel({
         <h3>
           {title} <small>{emotes.length}</small>
         </h3>
-        {error && <p className="emote-status">{error}</p>}
-        {!error && !emotes.length && <p className="emote-status">No emotes</p>}
+        {error && (
+          <p className="emote-status" role="alert">
+            {error}
+          </p>
+        )}
+        {!error && !emotes.length && !loading && <p className="emote-status">Смайлы не найдены</p>}
         <div className="emote-grid">
           {emotes.map((emote) => (
             <div className="emote-item" key={emote.id}>
               <button
                 type="button"
-                title={`Add ${emote.name} to SPAWN`}
+                title={`Добавить ${emote.name} в область подготовки`}
+                aria-label={`Добавить ${emote.name} в область подготовки`}
+                disabled={!canPlace}
                 onClick={() => onAdd(emote)}
               >
                 <img src={emote.previewUrl} alt="" loading="lazy" />
@@ -128,6 +148,8 @@ export function EmotesPanel({
                   type="button"
                   className="emote-delete"
                   title={`Delete ${emote.name}`}
+                  aria-label={`Удалить ${emote.name}`}
+                  disabled={deletingId === emote.id}
                   onClick={() => void deleteCustom(emote.id)}
                 >
                   ×
@@ -143,7 +165,7 @@ export function EmotesPanel({
   return (
     <aside className="emotes-panel">
       <div className="panel-title">
-        <span>EMOTES</span>
+        <span>Смайлы</span>
         <button
           type="button"
           onClick={() => void reload(true)}
@@ -154,11 +176,16 @@ export function EmotesPanel({
           <RefreshCw size={16} aria-hidden="true" />
         </button>
       </div>
+      {!canPlace && (
+        <p className="emote-status" role="status">
+          Для размещения смайла нужны соединение и доступ к редактору.
+        </p>
+      )}
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
-        placeholder="Search emotes..."
-        aria-label="Search emotes"
+        placeholder="Поиск смайлов"
+        aria-label="Поиск смайлов"
       />
       <div className="emote-channel">
         <label htmlFor="twitch-login">Twitch channel</label>
@@ -170,8 +197,12 @@ export function EmotesPanel({
             placeholder="channel login"
             disabled={!canConfigure}
           />
-          <button type="button" onClick={() => void saveChannel()} disabled={!canConfigure}>
-            Save
+          <button
+            type="button"
+            onClick={() => void saveChannel()}
+            disabled={!canConfigure || saving}
+          >
+            {saving ? "Сохраняем…" : "Сохранить"}
           </button>
         </div>
         <input
@@ -182,7 +213,11 @@ export function EmotesPanel({
           disabled={!canConfigure}
         />
       </div>
-      {loading && <p className="emote-status">Loading...</p>}
+      {loading && (
+        <p className="emote-status" role="status">
+          Загружаем смайлы…
+        </p>
+      )}
       {message && (
         <p className="emote-status" role="alert">
           {message}
@@ -193,7 +228,7 @@ export function EmotesPanel({
       {section("CUSTOM", filtered.custom)}
       {canCreate && (
         <div className="emote-custom-form">
-          <strong>+ Add emote by URL</strong>
+          <strong>Добавить смайл по URL</strong>
           <input
             value={url}
             onChange={(event) => setUrl(event.target.value)}
@@ -206,8 +241,8 @@ export function EmotesPanel({
             placeholder="Name (optional)"
             aria-label="Emote name"
           />
-          <button type="button" onClick={() => void addCustom()} disabled={!url.trim()}>
-            Add emote
+          <button type="button" onClick={() => void addCustom()} disabled={!url.trim() || creating}>
+            {creating ? "Добавляем…" : "Добавить смайл"}
           </button>
         </div>
       )}
