@@ -79,6 +79,8 @@ export const config = {
   initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? "",
   twitchClientId: process.env.TWITCH_CLIENT_ID ?? "",
   twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
+  twitchOAuthRedirectUri: process.env.TWITCH_OAUTH_REDIRECT_URI ?? "",
+  oauthTokenEncryptionKey: process.env.OAUTH_TOKEN_ENCRYPTION_KEY ?? "",
   ttsPython: process.env.TTS_PYTHON ?? ""
 };
 

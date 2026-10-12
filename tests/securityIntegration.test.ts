@@ -47,7 +47,11 @@ vi.mock("../src/server/config", () => ({
     maxTotalUploadSize: 10240,
     originAllowlist: [],
     initialAdminUsername: "owner",
-    initialAdminPassword: ""
+    initialAdminPassword: "",
+    twitchClientId: "oauth-test-client",
+    twitchClientSecret: "oauth-test-secret",
+    twitchOAuthRedirectUri: "",
+    oauthTokenEncryptionKey: "1".repeat(64)
   }
 }));
 
@@ -265,6 +269,196 @@ it("requires a non-template password before creating the first owner", async () 
   config.initialAdminPassword = "";
   await expect(ensureRuntimeState()).resolves.toBeUndefined();
   expect(await prisma.user.count()).toBe(1);
+});
+
+it.each(["streamer", "moderator"] as const)(
+  "completes isolated Twitch %s login with one-use state and exact scopes",
+  async (mode) => {
+    config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+    const realFetch = globalThis.fetch;
+    const twitchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (!url.startsWith("https://id.twitch.tv/") && !url.startsWith("https://api.twitch.tv/"))
+        return realFetch(input, init);
+      twitchCalls.push({ url, init });
+      const body = url.endsWith("/token")
+        ? {
+            access_token: "access-secret",
+            refresh_token: "refresh-secret",
+            expires_in: 3600,
+            scope: [mode === "streamer" ? "moderation:read" : "user:read:moderated_channels"]
+          }
+        : url.endsWith("/validate")
+          ? {
+              client_id: "oauth-test-client",
+              user_id: "12345",
+              scopes: [mode === "streamer" ? "moderation:read" : "user:read:moderated_channels"]
+            }
+          : {
+              data: [
+                {
+                  id: "12345",
+                  login: "testperson",
+                  display_name: "Test Person",
+                  profile_image_url: "https://example.com/avatar.png"
+                }
+              ]
+            };
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+      );
+    });
+    const start = await fetch(`${baseUrl}/api/auth/twitch/start/${mode}`, { redirect: "manual" });
+    expect(start.status).toBe(302);
+    const authorize = new URL(start.headers.get("location")!);
+    expect(authorize.origin).toBe("https://id.twitch.tv");
+    expect(authorize.searchParams.get("redirect_uri")).toBe(config.twitchOAuthRedirectUri);
+    expect(authorize.searchParams.get("scope")).toBe(
+      mode === "streamer" ? "moderation:read" : "user:read:moderated_channels"
+    );
+    const stateCookie = start.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith("mod_overlay_twitch_state="))!
+      .split(";")[0];
+    const callback = `${baseUrl}/api/auth/twitch/callback?state=${authorize.searchParams.get("state")}&code=sample-code`;
+    const invalid = await fetch(callback, {
+      headers: { Cookie: "mod_overlay_twitch_state=wrong" },
+      redirect: "manual"
+    });
+    expect(invalid.headers.get("location")).toBe("/login?oauth_error=invalid_state");
+    const result = await fetch(callback, { headers: { Cookie: stateCookie }, redirect: "manual" });
+    expect(result.status).toBe(303);
+    expect(result.headers.get("location")).toBe(mode === "streamer" ? "/streamer" : "/channels");
+    expect(result.headers.get("location")).not.toContain("code");
+    const sessionCookie = result.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith(`${sessionCookieName}=`))!
+      .split(";")[0];
+    const me = await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: sessionCookie } });
+    expect(me.status).toBe(200);
+    const identity = (await me.json()) as { user: { id: string }; mode: string; csrfToken: string };
+    expect(identity.user.id).toBe("12345");
+    expect(identity.mode).toBe(mode);
+    expect(
+      (await fetch(`${baseUrl}/api/auth/me`, { headers: { Cookie: sessionCookie } })).status
+    ).toBe(401);
+    expect(
+      (await fetch(`${baseUrl}/api/media`, { headers: { Cookie: sessionCookie } })).status
+    ).toBe(401);
+    const deniedSocket = connect(baseUrl, {
+      transports: ["websocket"],
+      reconnection: false,
+      autoConnect: false,
+      extraHeaders: { Cookie: sessionCookie }
+    });
+    clients.push(deniedSocket);
+    const socketError = event<Error>(deniedSocket, "connect_error");
+    deniedSocket.connect();
+    expect((await socketError).message).toBe("Authentication required");
+    expect(
+      (await fetch(callback, { headers: { Cookie: stateCookie }, redirect: "manual" })).headers.get(
+        "location"
+      )
+    ).toBe("/login?oauth_error=invalid_state");
+    expect(twitchCalls.filter((call) => call.url.endsWith("/token"))).toHaveLength(1);
+    expect(new URLSearchParams(String(twitchCalls[0].init?.body)).get("redirect_uri")).toBe(
+      config.twitchOAuthRedirectUri
+    );
+    const account = await prisma.user.findUnique({
+      where: { twitchUserId: "12345" },
+      include: { twitchConnections: true }
+    });
+    expect(account?.role).toBe("MODERATOR");
+    expect(account?.twitchConnections[0].encryptedAccess).not.toContain("access-secret");
+    const logout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "POST",
+      headers: { Cookie: sessionCookie, "x-csrf-token": identity.csrfToken }
+    });
+    expect(logout.status).toBe(200);
+    expect(
+      (await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: sessionCookie } })).status
+    ).toBe(401);
+    const nextStart = await fetch(`${baseUrl}/api/auth/twitch/start/${mode}`, {
+      redirect: "manual"
+    });
+    const nextState = new URL(nextStart.headers.get("location")!).searchParams.get("state");
+    const nextBinding = nextStart.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith("mod_overlay_twitch_state="))!
+      .split(";")[0];
+    const secondLogin = await fetch(
+      `${baseUrl}/api/auth/twitch/callback?state=${nextState}&code=second-code`,
+      { headers: { Cookie: nextBinding }, redirect: "manual" }
+    );
+    expect(secondLogin.status).toBe(303);
+    expect(await prisma.user.count({ where: { twitchUserId: "12345" } })).toBe(1);
+    expect((await prisma.user.findUnique({ where: { twitchUserId: "12345" } }))?.id).toBe(
+      account?.id
+    );
+  }
+);
+
+it("rejects denied, expired and underscoped Twitch callbacks without creating a session", async () => {
+  config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+  const realFetch = globalThis.fetch;
+  const tokenRequests: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.startsWith("https://id.twitch.tv/")) return realFetch(input, init);
+    tokenRequests.push(url);
+    const body = url.endsWith("/token")
+      ? {
+          access_token: "access-secret",
+          refresh_token: "refresh-secret",
+          expires_in: 3600,
+          scope: []
+        }
+      : { client_id: "oauth-test-client", user_id: "12345", scopes: [] };
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  });
+  async function start() {
+    const response = await fetch(`${baseUrl}/api/auth/twitch/start/moderator`, {
+      redirect: "manual"
+    });
+    return {
+      state: new URL(response.headers.get("location")!).searchParams.get("state")!,
+      cookie: response.headers
+        .getSetCookie()
+        .find((value) => value.startsWith("mod_overlay_twitch_state="))!
+        .split(";")[0]
+    };
+  }
+  const denied = await start();
+  const deniedResponse = await fetch(
+    `${baseUrl}/api/auth/twitch/callback?state=${denied.state}&error=access_denied`,
+    { headers: { Cookie: denied.cookie }, redirect: "manual" }
+  );
+  expect(deniedResponse.headers.get("location")).toBe("/login?oauth_error=denied");
+  expect(tokenRequests).toHaveLength(0);
+  const expired = await start();
+  await prisma.twitchOAuthState.update({
+    where: {
+      stateHash: (await prisma.twitchOAuthState.findFirst({ orderBy: { createdAt: "desc" } }))!
+        .stateHash
+    },
+    data: { expiresAt: new Date(Date.now() - 1000) }
+  });
+  const expiredResponse = await fetch(
+    `${baseUrl}/api/auth/twitch/callback?state=${expired.state}&code=code`,
+    { headers: { Cookie: expired.cookie }, redirect: "manual" }
+  );
+  expect(expiredResponse.headers.get("location")).toBe("/login?oauth_error=invalid_state");
+  const underscoped = await start();
+  const response = await fetch(
+    `${baseUrl}/api/auth/twitch/callback?state=${underscoped.state}&code=code`,
+    { headers: { Cookie: underscoped.cookie }, redirect: "manual" }
+  );
+  expect(response.headers.get("location")).toBe("/login?oauth_error=twitch_unavailable");
+  expect(await prisma.user.count({ where: { twitchUserId: { not: null } } })).toBe(0);
 });
 
 it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {

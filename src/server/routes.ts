@@ -13,6 +13,7 @@ import {
   createSession,
   destroySession,
   getCsrfTokenFromRequest,
+  getSessionFromCookieHeader,
   getUserFromRequest,
   requireAuth,
   requirePermission,
@@ -28,6 +29,7 @@ import { ttsRouter } from "./tts";
 import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
 import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
+import { twitchAuthRouter } from "./twitchAuth";
 import {
   deleteStoredUpload,
   uploadErrorHandler,
@@ -71,6 +73,7 @@ const emoteMutationLimit = createRateLimitMiddleware({
 
 export function createAppRouter(): express.Router {
   const router = express.Router();
+  router.use("/auth/twitch", twitchAuthRouter());
   router.use("/tts", ttsRouter());
 
   router.post("/auth/login", loginIpRateLimit, loginAccountRateLimit, async (request, response) => {
@@ -84,7 +87,11 @@ export function createAppRouter(): express.Router {
     const user = await prisma.user.findUnique({
       where: { username: parsed.data.username }
     });
-    if (!user || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
+    if (
+      !user ||
+      user.twitchUserId ||
+      !(await bcrypt.compare(parsed.data.password, user.passwordHash))
+    ) {
       await writeAudit(streamer.id, user?.id ?? null, "auth.login_failed", {
         username: parsed.data.username,
         ip: clientIp(request)
@@ -98,7 +105,11 @@ export function createAppRouter(): express.Router {
     response.json({ user: toUserView(user), streamer: toStreamerView(streamer), csrfToken });
   });
 
-  router.post("/auth/logout", requireAuth, async (request, response) => {
+  router.post("/auth/logout", async (request, response) => {
+    if (!(await getSessionFromCookieHeader(request.headers.cookie))) {
+      response.status(401).json({ error: "Authentication required" });
+      return;
+    }
     await destroySession(request, response);
     response.json({ ok: true });
   });

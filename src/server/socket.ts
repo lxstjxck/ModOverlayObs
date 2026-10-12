@@ -136,7 +136,7 @@ export function configureSocket(httpServer: HttpServer): Server {
       }
 
       const session = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
-      if (!session) {
+      if (!session || session.authMethod !== "LEGACY") {
         finish(new Error("Authentication required"));
         return;
       }

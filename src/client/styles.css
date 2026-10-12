@@ -198,6 +198,22 @@ input[type="color"] {
   margin-top: 18px;
 }
 
+.login-form a.primary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #2d6f56;
+  border-radius: 6px;
+  background: #18835f;
+  color: #fff;
+  text-decoration: none;
+}
+
+.login-form a.primary:hover {
+  background: #1d9770;
+}
+
 .moderator-app {
   height: 100%;
   display: grid;

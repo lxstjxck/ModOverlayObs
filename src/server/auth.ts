@@ -41,13 +41,19 @@ export function toUserView(user: {
   };
 }
 
-export async function createSession(userId: string, response: Response): Promise<string> {
+export async function createSession(
+  userId: string,
+  response: Response,
+  twitchMode?: "streamer" | "moderator"
+): Promise<string> {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + sessionDays * 24 * 60 * 60 * 1000);
   await prisma.session.create({
     data: {
       tokenHash: hashSessionToken(token),
       userId,
+      authMethod: twitchMode ? "TWITCH" : "LEGACY",
+      twitchMode: twitchMode ?? null,
       expiresAt
     }
   });
@@ -93,7 +99,8 @@ export async function getSessionFromCookieHeader(cookieHeader?: string) {
 }
 
 export async function getUserFromCookieHeader(cookieHeader?: string) {
-  return (await getSessionFromCookieHeader(cookieHeader))?.user ?? null;
+  const session = await getSessionFromCookieHeader(cookieHeader);
+  return session?.authMethod === "LEGACY" ? session.user : null;
 }
 
 export async function getUserFromRequest(request: Request) {
@@ -116,6 +123,19 @@ export async function requireAuth(
     return;
   }
   (request as AuthenticatedRequest).user = user;
+  next();
+}
+
+export async function requireTwitchAuth(
+  request: Request,
+  response: Response,
+  next: NextFunction
+): Promise<void> {
+  const session = await getSessionFromCookieHeader(request.headers.cookie);
+  if (session?.authMethod !== "TWITCH" || !session.user.twitchUserId) {
+    response.status(401).json({ error: "Twitch authentication required" });
+    return;
+  }
   next();
 }
 

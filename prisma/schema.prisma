@@ -33,11 +33,15 @@ model User {
   username        String     @unique
   displayName     String
   passwordHash    String
+  twitchUserId    String?    @unique
+  twitchLogin     String?
+  twitchAvatarUrl String?
   role            Role       @default(MODERATOR)
   permissionsJson String     @default("{}")
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   sessions        Session[]
+  twitchConnections TwitchOAuthConnection[]
   media           Media[]
   auditLogs       AuditLog[]
 }
@@ -46,12 +50,42 @@ model Session {
   id        String   @id @default(cuid())
   tokenHash String   @unique
   userId    String
+  authMethod String @default("LEGACY")
+  twitchMode String?
   expiresAt DateTime
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model TwitchOAuthState {
+  stateHash   String   @id
+  bindingHash String
+  mode        String
+  redirectUri String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model TwitchOAuthConnection {
+  id                String   @id @default(cuid())
+  userId            String
+  mode              String
+  encryptedAccess   String
+  encryptedRefresh  String
+  scopesJson        String
+  expiresAt         DateTime
+  checkedAt         DateTime
+  revokedAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mode])
 }
 
 model Streamer {

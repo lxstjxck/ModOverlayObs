@@ -21,4 +21,4 @@ COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/.env.example ./.env.example
 RUN mkdir -p /app/database /app/uploads
 EXPOSE 4000
-CMD ["sh", "-c", "mkdir -p /app/database /app/uploads && touch /app/database/modoverlay.db && npx prisma db push && node dist/server/server/server.js"]
+CMD ["node", "dist/server/server/server.js"]
