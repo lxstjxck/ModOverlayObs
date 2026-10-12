@@ -42,6 +42,8 @@ model User {
   updatedAt       DateTime   @updatedAt
   sessions        Session[]
   twitchConnections TwitchOAuthConnection[]
+  ownedChannel    Streamer?
+  channelBans     ChannelModeratorBan[]
   media           Media[]
   auditLogs       AuditLog[]
 }
@@ -64,6 +66,7 @@ model TwitchOAuthState {
   stateHash   String   @id
   bindingHash String
   mode        String
+  legacySessionHash String?
   redirectUri String
   expiresAt   DateTime
   createdAt   DateTime @default(now())
@@ -103,7 +106,29 @@ model Streamer {
   auditLogs           AuditLog[]
   twitchLogin         String?
   twitchBroadcasterId String?
+  ownerUserId         String?          @unique
+  owner               User?            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
+  moderatorSnapshot   ChannelModeratorSnapshot?
+  moderatorBans       ChannelModeratorBan[]
   customEmotes        CustomEmote[]
+}
+
+model ChannelModeratorSnapshot {
+  channelId  String   @id
+  userIdsJson String
+  checkedAt  DateTime
+  channel    Streamer @relation(fields: [channelId], references: [id], onDelete: Cascade)
+}
+
+model ChannelModeratorBan {
+  channelId String
+  userId    String
+  createdAt DateTime @default(now())
+  channel   Streamer  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, userId])
+  @@index([userId])
 }
 
 model CustomEmote {

@@ -6,6 +6,8 @@ import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
 import { hasPermission, parsePermissions } from "./permissions";
+import { canAccessChannel } from "./channelAccess";
+import { getDefaultStreamer } from "./state";
 
 export const sessionCookieName = "mod_overlay_session";
 const sessionDays = 7;
@@ -117,12 +119,17 @@ export async function requireAuth(
   response: Response,
   next: NextFunction
 ): Promise<void> {
-  const user = await getUserFromRequest(request);
-  if (!user) {
+  const session = await getSessionFromCookieHeader(request.headers.cookie);
+  if (!session || session.authMethod !== "LEGACY") {
     response.status(401).json({ error: "Authentication required" });
     return;
   }
-  (request as AuthenticatedRequest).user = user;
+  const channel = await getDefaultStreamer();
+  if (!(await canAccessChannel(session, channel.id))) {
+    response.status(403).json({ error: "Channel access denied" });
+    return;
+  }
+  (request as AuthenticatedRequest).user = session.user;
   next();
 }
 

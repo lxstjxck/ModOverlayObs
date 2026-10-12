@@ -14,7 +14,6 @@ import {
   destroySession,
   getCsrfTokenFromRequest,
   getSessionFromCookieHeader,
-  getUserFromRequest,
   requireAuth,
   requirePermission,
   toUserView,
@@ -30,6 +29,7 @@ import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
 import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
 import { twitchAuthRouter } from "./twitchAuth";
+import { canAccessChannel } from "./channelAccess";
 import {
   deleteStoredUpload,
   uploadErrorHandler,
@@ -114,6 +114,18 @@ export function createAppRouter(): express.Router {
     response.json({ ok: true });
   });
 
+  // The legacy editor has one channel context until the channel picker is shipped.
+  router.use(async (request, response, next) => {
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (!session || session.authMethod !== "LEGACY") { response.status(401).json({ error: "Authentication required" }); return; }
+    const channel = await getDefaultStreamer();
+    const requested = request.get("x-channel-id") ?? request.query.channelId;
+    if ((requested && requested !== channel.id) || !(await canAccessChannel(session, channel.id))) {
+      response.status(403).json({ error: "Channel access denied" }); return;
+    }
+    next();
+  });
+
   router.get("/auth/me", requireAuth, async (request, response) => {
     const streamer = await getDefaultStreamer();
     response.json({
@@ -145,6 +157,10 @@ export function createAppRouter(): express.Router {
         return;
       }
       const streamer = await getDefaultStreamer();
+      if (streamer.ownerUserId) {
+        response.status(409).json({ error: "Bound Twitch identity cannot be changed here" });
+        return;
+      }
       const updated = await prisma.streamer.update({
         where: { id: streamer.id },
         data: {
@@ -511,18 +527,19 @@ export function configureUploads(app: express.Express): void {
     async (request, response, next) => {
       response.setHeader("Cache-Control", "private, no-store");
       const token = request.query.overlayToken;
-      const user = await getUserFromRequest(request);
+      const session = await getSessionFromCookieHeader(request.headers.cookie);
       const streamer =
         typeof token === "string"
           ? await prisma.streamer.findUnique({ where: { overlayToken: token } })
           : null;
-      if (!user && !streamer) {
+      if (!session && !streamer) {
         response.status(401).end();
         return;
       }
       const filename = decodeURIComponent(request.path.slice(1));
       const media = await prisma.media.findUnique({ where: { filename } });
-      if (!media || (streamer && !user && media.streamerId !== streamer.id)) {
+      if (!media || (streamer && media.streamerId !== streamer.id) ||
+        (session && (session.authMethod !== "LEGACY" || !(await canAccessChannel(session, media.streamerId))))) {
         response.status(404).end();
         return;
       }

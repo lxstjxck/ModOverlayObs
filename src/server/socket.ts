@@ -16,6 +16,7 @@ import {
   hashSessionToken
 } from "./auth";
 import { accessRevocation } from "./accessRevocation";
+import { canAccessChannel } from "./channelAccess";
 import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
@@ -98,13 +99,31 @@ export function configureSocket(httpServer: HttpServer): Server {
     const onOverlayRevoked = (oldToken: string) => {
       if (token === oldToken) revoke();
     };
+    const onUserRevoked = (userId: string) => {
+      const context = contexts.get(socket);
+      if (context?.kind === "moderator" && context.user.id === userId) revoke();
+    };
+    const onTwitchUserRevoked = (twitchUserId: string) => {
+      const context = contexts.get(socket);
+      if (context?.kind === "moderator" && context.user.twitchUserId === twitchUserId) revoke();
+    };
+    const onChannelRevoked = (channelId: string) => {
+      const context = contexts.get(socket);
+      if (context?.kind === "moderator" && context.user.twitchUserId && context.streamerId === channelId) revoke();
+    };
     const cleanup = () => {
       accessRevocation.off("session", onSessionRevoked);
       accessRevocation.off("overlay", onOverlayRevoked);
+      accessRevocation.off("user", onUserRevoked);
+      accessRevocation.off("twitchUser", onTwitchUserRevoked);
+      accessRevocation.off("channel", onChannelRevoked);
       clearTimeout(expiryTimer);
     };
     accessRevocation.on("session", onSessionRevoked);
     accessRevocation.on("overlay", onOverlayRevoked);
+    accessRevocation.on("user", onUserRevoked);
+    accessRevocation.on("twitchUser", onTwitchUserRevoked);
+    accessRevocation.on("channel", onChannelRevoked);
     socket.once("disconnect", cleanup);
     socket.conn.once("close", cleanup);
     const finish: typeof next = (error) => {
@@ -126,7 +145,8 @@ export function configureSocket(httpServer: HttpServer): Server {
 
       if (token) {
         const streamer = await prisma.streamer.findUnique({ where: { overlayToken: token } });
-        if (!streamer) {
+        const requestedChannel = readStringQuery(socket.handshake.query.channelId);
+        if (!streamer || (requestedChannel && requestedChannel !== streamer.id)) {
           finish(new Error("Invalid overlay token"));
           return;
         }
@@ -141,6 +161,11 @@ export function configureSocket(httpServer: HttpServer): Server {
         return;
       }
       const streamer = await getDefaultStreamer();
+      const requestedChannel = readStringQuery(socket.handshake.query.channelId);
+      if ((requestedChannel && requestedChannel !== streamer.id) || !(await canAccessChannel(session, streamer.id))) {
+        finish(new Error("Channel access denied"));
+        return;
+      }
       if (session.expiresAt.getTime() <= Date.now()) {
         finish(new Error("Session expired"));
         return;
@@ -404,7 +429,10 @@ async function guarded(
       return false;
     }
     const currentUser = await getUserFromCookieHeader(socket.handshake.headers.cookie);
-    if (!socket.connected || !currentUser || currentUser.id !== user.id) {
+    const currentSession = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
+    const context = contexts.get(socket);
+    if (!socket.connected || !currentUser || currentUser.id !== user.id ||
+      context?.kind !== "moderator" || !currentSession || !(await canAccessChannel(currentSession, context.streamerId))) {
       socket.emit("access:revoked");
       socket.disconnect(true);
       return false;

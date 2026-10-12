@@ -8,9 +8,13 @@ import {
   destroySession,
   getCsrfTokenFromRequest,
   getSessionFromCookieHeader,
+  hashSessionToken,
+  readSessionToken,
   requireTwitchAuth
 } from "./auth";
 import { clientIp, createRateLimitMiddleware } from "./security";
+import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModeratorBan, syncModerators } from "./channelAccess";
+import { getDefaultStreamer } from "./state";
 
 type TwitchMode = "streamer" | "moderator";
 const stateCookie = "mod_overlay_twitch_state";
@@ -51,17 +55,6 @@ function configured(): boolean {
   }
 }
 
-function encrypt(value: string): string {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv(
-    "aes-256-gcm",
-    Buffer.from(config.oauthTokenEncryptionKey, "hex"),
-    iv
-  );
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return [iv, cipher.getAuthTag(), ciphertext].map((part) => part.toString("base64url")).join(".");
-}
-
 async function twitchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, signal: AbortSignal.timeout(8000) });
   if (!response.ok) throw new Error("Twitch authorization failed");
@@ -78,7 +71,7 @@ export function twitchAuthRouter(): express.Router {
 
   router.get("/start/:mode", startLimit, async (request, response) => {
     const mode = request.params.mode;
-    if (mode !== "streamer" && mode !== "moderator") {
+    if (mode !== "streamer" && mode !== "moderator" && mode !== "bind") {
       response.status(404).json({ error: "Unknown login mode" });
       return;
     }
@@ -87,7 +80,15 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     const existing = await getSessionFromCookieHeader(request.headers.cookie);
-    if (existing?.authMethod === "LEGACY") {
+    if (mode === "bind" && (existing?.authMethod !== "LEGACY" || existing.user.role !== "OWNER")) {
+      response.status(403).json({ error: "Legacy owner session required" });
+      return;
+    }
+    if (mode === "bind" && (await getDefaultStreamer()).ownerUserId) {
+      response.status(409).json({ error: "Channel is already bound" });
+      return;
+    }
+    if (mode !== "bind" && existing?.authMethod === "LEGACY") {
       response.status(409).json({ error: "Sign out of the legacy account before Twitch login" });
       return;
     }
@@ -99,6 +100,7 @@ export function twitchAuthRouter(): express.Router {
         stateHash: hash(state),
         bindingHash: hash(binding),
         mode,
+        legacySessionHash: mode === "bind" ? hashSessionToken(readSessionToken(request.headers.cookie)!) : null,
         redirectUri: config.twitchOAuthRedirectUri,
         expiresAt: new Date(Date.now() + stateTtlMs)
       }
@@ -114,7 +116,7 @@ export function twitchAuthRouter(): express.Router {
     authorize.searchParams.set("response_type", "code");
     authorize.searchParams.set("client_id", config.twitchClientId);
     authorize.searchParams.set("redirect_uri", config.twitchOAuthRedirectUri);
-    authorize.searchParams.set("scope", scopes[mode]);
+    authorize.searchParams.set("scope", scopes[mode === "bind" ? "streamer" : mode]);
     authorize.searchParams.set("state", state);
     response.setHeader("Cache-Control", "no-store");
     response.redirect(authorize.toString());
@@ -149,7 +151,15 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     const existing = await getSessionFromCookieHeader(request.headers.cookie);
-    if (existing?.authMethod === "LEGACY") {
+    if (grant.mode === "bind" && (
+      existing?.authMethod !== "LEGACY" ||
+      existing.user.role !== "OWNER" ||
+      grant.legacySessionHash !== hashSessionToken(readSessionToken(request.headers.cookie) ?? "")
+    )) {
+      fail(response, "legacy_owner_required");
+      return;
+    }
+    if (grant.mode !== "bind" && existing?.authMethod === "LEGACY") {
       fail(response, "legacy_session");
       return;
     }
@@ -160,13 +170,13 @@ export function twitchAuthRouter(): express.Router {
     if (
       typeof request.query.code !== "string" ||
       !request.query.code ||
-      (grant.mode !== "streamer" && grant.mode !== "moderator")
+      (grant.mode !== "streamer" && grant.mode !== "moderator" && grant.mode !== "bind")
     ) {
       fail(response, "invalid_response");
       return;
     }
     try {
-      const mode = grant.mode as TwitchMode;
+      const mode: TwitchMode = grant.mode === "bind" ? "streamer" : grant.mode as TwitchMode;
       const body = new URLSearchParams({
         client_id: config.twitchClientId,
         client_secret: config.twitchClientSecret,
@@ -209,6 +219,10 @@ export function twitchAuthRouter(): express.Router {
       const profile = users.data?.[0];
       if (!profile || profile.id !== validated.user_id || !profile.login)
         throw new Error("Invalid Twitch profile");
+      const channel = grant.mode === "bind" ? await getDefaultStreamer() : null;
+      if (channel && (channel.ownerUserId || (channel.twitchBroadcasterId && channel.twitchBroadcasterId !== profile.id))) {
+        throw new Error("Channel already bound or broadcaster mismatch");
+      }
       const user = await prisma.$transaction(async (tx) => {
         const existingUser = await tx.user.findUnique({ where: { twitchUserId: profile.id } });
         const account = existingUser
@@ -237,23 +251,36 @@ export function twitchAuthRouter(): express.Router {
           create: {
             userId: account.id,
             mode,
-            encryptedAccess: encrypt(tokens.access_token),
-            encryptedRefresh: encrypt(tokens.refresh_token),
+            encryptedAccess: encryptOAuthToken(tokens.access_token),
+            encryptedRefresh: encryptOAuthToken(tokens.refresh_token),
             scopesJson: JSON.stringify(validated.scopes),
             expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
             checkedAt: new Date()
           },
           update: {
-            encryptedAccess: encrypt(tokens.access_token),
-            encryptedRefresh: encrypt(tokens.refresh_token),
+            encryptedAccess: encryptOAuthToken(tokens.access_token),
+            encryptedRefresh: encryptOAuthToken(tokens.refresh_token),
             scopesJson: JSON.stringify(validated.scopes),
             expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
             checkedAt: new Date(),
             revokedAt: null
           }
         });
+        if (channel) {
+          const conflicting = await tx.streamer.findFirst({ where: { twitchBroadcasterId: profile.id, id: { not: channel.id } } });
+          if (conflicting) throw new Error("Twitch owner already bound");
+          const updated = await tx.streamer.updateMany({
+            where: { id: channel.id, ownerUserId: null },
+            data: { ownerUserId: account.id, twitchBroadcasterId: profile.id, twitchLogin: profile.login }
+          });
+          if (updated.count !== 1) throw new Error("Channel binding conflict");
+        }
         return account;
       });
+      if (channel) {
+        response.redirect(303, "/streamer?oauth_bound=1");
+        return;
+      }
       if (existing) await destroySession(request, response);
       await createSession(user.id, response, mode);
       response.redirect(303, target[mode]);
@@ -275,6 +302,54 @@ export function twitchAuthRouter(): express.Router {
       mode: session!.twitchMode,
       csrfToken: getCsrfTokenFromRequest(request)
     });
+  });
+
+  router.get("/channels", requireTwitchAuth, async (request, response) => {
+    const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
+    try {
+      const channels = session.twitchMode === "moderator"
+        ? await getModeratedChannels(session.user.id)
+        : new Set([session.user.twitchUserId!]);
+      const linked = await prisma.streamer.findMany({
+        where: { twitchBroadcasterId: { in: [...channels] }, ownerUserId: { not: null } },
+        select: { id: true, displayName: true, twitchLogin: true }
+      });
+      const allowed = [];
+      for (const channel of linked) if (await canAccessChannel(session, channel.id)) allowed.push(channel);
+      response.setHeader("Cache-Control", "no-store");
+      response.json({ channels: allowed });
+    } catch {
+      response.status(503).json({ error: "Twitch access verification unavailable" });
+    }
+  });
+
+  router.get("/channels/:channelId/moderators", requireTwitchAuth, async (request, response) => {
+    const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
+    const channelId = String(request.params.channelId);
+    const channel = await prisma.streamer.findUnique({ where: { id: channelId } });
+    if (!channel || channel.ownerUserId !== session.user.id || session.twitchMode !== "streamer" || !(await canAccessChannel(session, channelId))) {
+      response.status(403).json({ error: "Permission denied" });
+      return;
+    }
+    try {
+      const ids = await syncModerators(channelId);
+      const users = await prisma.user.findMany({ where: { twitchUserId: { in: [...ids] } }, select: { id: true, twitchUserId: true, displayName: true } });
+      const bans = await prisma.channelModeratorBan.findMany({ where: { channelId }, select: { userId: true } });
+      response.setHeader("Cache-Control", "no-store");
+      response.json({ moderators: users.map((user) => ({ ...user, banned: bans.some((ban) => ban.userId === user.id) })) });
+    } catch {
+      response.status(503).json({ error: "Twitch access verification unavailable" });
+    }
+  });
+
+  for (const method of ["put", "delete"] as const) router[method]("/channels/:channelId/bans/:userId", requireTwitchAuth, async (request, response) => {
+    const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
+    const channelId = String(request.params.channelId);
+    if (session.twitchMode !== "streamer" || !(await canAccessChannel(session, channelId))) { response.status(403).json({ error: "Permission denied" }); return; }
+    try {
+      await setModeratorBan(channelId, session.user.id, String(request.params.userId), method === "put");
+      response.json({ ok: true });
+    } catch { response.status(403).json({ error: "Permission denied" }); }
   });
 
   return router;

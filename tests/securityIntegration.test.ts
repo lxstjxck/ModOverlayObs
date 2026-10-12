@@ -68,6 +68,7 @@ import { requireCsrf, requireTrustedOrigin } from "../src/server/security";
 import { accessRevocation } from "../src/server/accessRevocation";
 import { getChannelEmotes } from "../src/server/emotes";
 import { ensureRuntimeState } from "../src/server/bootstrap";
+import { canAccessChannel, getModeratedChannels, setModeratorBan, syncModerators } from "../src/server/channelAccess";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -401,6 +402,114 @@ it.each(["streamer", "moderator"] as const)(
     );
   }
 );
+
+it("binds the existing channel only with the same legacy owner session and Twitch identity", async () => {
+  config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+  await prisma.media.create({ data: { streamerId, filename: "keep.png", originalName: "keep.png", mimeType: "image/png", type: "IMAGE", size: png.length, url: "/uploads/keep.png" } });
+  await prisma.settings.create({ data: { key: `tts:twitch:${streamerId}`, value: "existing-tts-setting" } });
+  const denied = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers("mod-session"), redirect: "manual" });
+  expect(denied.status).toBe(403);
+  const start = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" });
+  expect(start.status).toBe(302);
+  const authorize = new URL(start.headers.get("location")!);
+  expect(authorize.searchParams.get("scope")).toBe("moderation:read");
+  const stateCookie = start.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
+  const callback = `${baseUrl}/api/auth/twitch/callback?state=${authorize.searchParams.get("state")}&code=code`;
+  const wrongSession = await fetch(callback, { headers: { Cookie: `${stateCookie}; ${headers("mod-session").Cookie}` }, redirect: "manual" });
+  expect(wrongSession.headers.get("location")).toBe("/login?oauth_error=legacy_owner_required");
+  expect((await prisma.streamer.findUnique({ where: { id: streamerId } }))?.ownerUserId).toBeNull();
+  const retry = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" });
+  const retryState = new URL(retry.headers.get("location")!).searchParams.get("state");
+  const retryCookie = retry.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.startsWith("https://")) return realFetch(input, init);
+    const body = url.endsWith("/token")
+      ? { access_token: "owner-access", refresh_token: "owner-refresh", expires_in: 3600, scope: ["moderation:read"] }
+      : url.endsWith("/validate")
+        ? { client_id: "oauth-test-client", user_id: "12345", scopes: ["moderation:read"] }
+        : { data: [{ id: "12345", login: "ownername", display_name: "Owner Name", profile_image_url: "" }] };
+    return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  });
+  const result = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${retryState}&code=code`, { headers: { Cookie: `${retryCookie}; ${headers().Cookie}` }, redirect: "manual" });
+  expect(result.status).toBe(303);
+  expect(result.headers.get("location")).toBe("/streamer?oauth_bound=1");
+  expect(result.headers.getSetCookie().some((value) => value.startsWith(`${sessionCookieName}=`))).toBe(false);
+  const channel = await prisma.streamer.findUnique({ where: { id: streamerId } });
+  expect(channel).toMatchObject({ twitchBroadcasterId: "12345", twitchLogin: "ownername", overlayToken: "overlay-old" });
+  expect(channel?.ownerUserId).toBeTruthy();
+  const relabel = await fetch(`${baseUrl}/api/streamer/twitch`, {
+    method: "PATCH",
+    headers: { ...headers(), "Content-Type": "application/json" },
+    body: JSON.stringify({ login: "imposter", broadcasterId: "99999" })
+  });
+  expect(relabel.status).toBe(409);
+  expect((await prisma.streamer.findUnique({ where: { id: streamerId } }))?.twitchBroadcasterId).toBe("12345");
+  expect((await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" })).status).toBe(409);
+  expect((await prisma.media.count({ where: { streamerId } }))).toBe(1);
+  expect((await prisma.settings.findUnique({ where: { key: `tts:twitch:${streamerId}` } }))?.value).toBe("existing-tts-setting");
+});
+
+it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates foreign media", async () => {
+  const owner = await prisma.user.create({ data: { username: "twitch:12345", displayName: "Twitch owner", passwordHash: "!", twitchUserId: "12345" } });
+  const mod = await prisma.user.create({ data: { username: "twitch:67890", displayName: "Twitch mod", passwordHash: "!", twitchUserId: "67890" } });
+  await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: owner.id, twitchBroadcasterId: "12345" } });
+  const second = await prisma.streamer.create({ data: { displayName: "Foreign", overlayToken: "foreign-token" } });
+  const { encryptOAuthToken } = await import("../src/server/channelAccess");
+  for (const [userId, mode] of [[owner.id, "streamer"], [mod.id, "moderator"]] as const) {
+    await prisma.twitchOAuthConnection.create({ data: { userId, mode, encryptedAccess: encryptOAuthToken("access"), encryptedRefresh: encryptOAuthToken("refresh"), scopesJson: "[]", expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date() } });
+  }
+  await prisma.session.create({ data: { userId: mod.id, tokenHash: hashSessionToken("twitch-mod"), authMethod: "TWITCH", twitchMode: "moderator", expiresAt: new Date(Date.now() + 3600_000) } });
+  await prisma.session.create({ data: { userId: owner.id, tokenHash: hashSessionToken("twitch-owner"), authMethod: "TWITCH", twitchMode: "streamer", expiresAt: new Date(Date.now() + 3600_000) } });
+  const session = await prisma.session.findFirstOrThrow({ where: { tokenHash: hashSessionToken("twitch-mod") }, include: { user: true } });
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.startsWith("https://api.twitch.tv/")) return realFetch(input, init);
+    const first = !url.includes("after=next");
+    const moderators = url.includes("/moderators");
+    const data = moderators
+      ? first ? [{ user_id: "99999" }] : [{ user_id: "67890" }]
+      : first ? [{ broadcaster_id: "99999" }] : [{ broadcaster_id: "12345" }];
+    expect((init?.headers as Record<string, string>)["Client-Id"]).toBe("oauth-test-client");
+    return Promise.resolve(new Response(JSON.stringify({ data, pagination: first ? { cursor: "next" } : {} }), { status: 200 }));
+  });
+  expect(await getModeratedChannels(mod.id)).toContain("12345");
+  expect(await syncModerators(streamerId)).toContain("67890");
+  expect(await canAccessChannel(session, streamerId)).toBe(true);
+  expect(await canAccessChannel(session, second.id)).toBe(false);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-mod") })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${second.id}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-owner") })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-owner") })).status).toBe(200);
+  expect(await canAccessChannel(session, streamerId)).toBe(false);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "DELETE", headers: headers("twitch-owner") })).status).toBe(200);
+  await setModeratorBan(streamerId, owner.id, mod.id, true);
+  expect(await canAccessChannel(session, streamerId)).toBe(false);
+  await setModeratorBan(streamerId, owner.id, mod.id, false);
+  expect(await canAccessChannel(session, streamerId)).toBe(true);
+  await prisma.channelModeratorSnapshot.update({ where: { channelId: streamerId }, data: { checkedAt: new Date(Date.now() - 20 * 60_000) } });
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => String(input).startsWith("https://api.twitch.tv/") ? Promise.reject(new Error("Twitch unavailable")) : realFetch(input, init));
+  expect(await canAccessChannel(session, streamerId)).toBe(false);
+  await prisma.channelModeratorSnapshot.update({ where: { channelId: streamerId }, data: { checkedAt: new Date(Date.now() - 6 * 60_000) } });
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url.startsWith("https://api.twitch.tv/")) return Promise.resolve(new Response(null, { status: 401 }));
+    if (url === "https://id.twitch.tv/oauth2/token") return Promise.resolve(new Response(null, { status: 400 }));
+    return realFetch(input, init);
+  });
+  expect(await canAccessChannel(session, streamerId)).toBe(false);
+  expect((await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId: owner.id, mode: "streamer" } } }))?.revokedAt).toBeTruthy();
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-owner") })).status).toBe(403);
+  await prisma.media.create({ data: { streamerId: second.id, filename: "foreign.png", originalName: "foreign.png", mimeType: "image/png", type: "IMAGE", size: png.length, url: "/uploads/foreign.png" } });
+  await fs.writeFile(path.join(config.uploadDir, "foreign.png"), png);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png`, { headers: headers() })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png`, { method: "HEAD", headers: headers() })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png`, { headers: { ...headers(), Range: "bytes=0-3" } })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=overlay-old`)).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=foreign-token`)).status).toBe(200);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: { ...headers(), "x-channel-id": second.id } })).status).toBe(403);
+});
 
 it("rejects denied, expired and underscoped Twitch callbacks without creating a session", async () => {
   config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
