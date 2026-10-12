@@ -20,11 +20,14 @@ const defaultStreamer: StreamerView = {
   id: "overlay",
   displayName: "Overlay",
   canvasWidth: 1920,
-  canvasHeight: 1080
+  canvasHeight: 1080,
+  canvasRevision: ""
 };
 
 export function OverlayPage({ token }: { token: string }) {
   const [canvas, setCanvas] = useState<OverlayElement[]>([]);
+  const [streamer, setStreamer] = useState<StreamerView>(defaultStreamer);
+  const streamerRef = useRef<StreamerView>(defaultStreamer);
   const socketRef = useRef<Socket | null>(null);
   const appliedCommandKeys = useRef(new Map<string, string>());
   const canonicalCanvas = useRef<OverlayElement[]>([]);
@@ -54,7 +57,13 @@ export function OverlayPage({ token }: { token: string }) {
       setCanvas([]);
       canonicalCanvas.current = [];
       appliedCommandKeys.current.clear();
+      setStreamer(defaultStreamer);
+      streamerRef.current = defaultStreamer;
     };
+    socket.on("canvas:state", (value: StreamerView) => {
+      streamerRef.current = value;
+      setStreamer(value);
+    });
     socket.on("access:revoked", clearCanvas);
     socket.on("disconnect", clearCanvas);
     socket.on("connect_error", clearCanvas);
@@ -68,15 +77,15 @@ export function OverlayPage({ token }: { token: string }) {
       const stage = node?.closest<HTMLElement>(".stage-surface");
       if (!base || !node || !stage) return;
       const dx =
-        (((transform.x ?? base.x) - base.x) * stage.clientWidth) / defaultStreamer.canvasWidth;
+        (((transform.x ?? base.x) - base.x) * stage.clientWidth) / streamerRef.current.canvasWidth;
       const dy =
-        (((transform.y ?? base.y) - base.y) * stage.clientHeight) / defaultStreamer.canvasHeight;
+        (((transform.y ?? base.y) - base.y) * stage.clientHeight) / streamerRef.current.canvasHeight;
       node.style.transition = "transform 25ms linear, width 25ms linear, height 25ms linear";
       node.style.transform = `translate3d(${dx}px, ${dy}px, 0) rotate(${transform.rotation ?? base.rotation}deg)`;
       if (transform.width !== undefined)
-        node.style.width = `${(transform.width / defaultStreamer.canvasWidth) * 100}%`;
+        node.style.width = `${(transform.width / streamerRef.current.canvasWidth) * 100}%`;
       if (transform.height !== undefined)
-        node.style.height = `${(transform.height / defaultStreamer.canvasHeight) * 100}%`;
+        node.style.height = `${(transform.height / streamerRef.current.canvasHeight) * 100}%`;
       if (transform.crop) {
         const media = node.querySelector<HTMLElement>(".media-element");
         if (media)
@@ -137,8 +146,8 @@ export function OverlayPage({ token }: { token: string }) {
     [canvas, token]
   );
   const onAirElements = useMemo(
-    () => displayElements.filter((element) => isElementInViewport(element, defaultStreamer)),
-    [displayElements]
+    () => displayElements.filter((element) => isElementInViewport(element, streamer)),
+    [displayElements, streamer]
   );
 
   useLayoutEffect(() => {
@@ -147,14 +156,14 @@ export function OverlayPage({ token }: { token: string }) {
       if (!node) continue;
       node.style.transition = "";
       node.style.transform = `rotate(${element.rotation}deg)`;
-      node.style.width = `${(element.width / defaultStreamer.canvasWidth) * 100}%`;
-      node.style.height = `${(element.height / defaultStreamer.canvasHeight) * 100}%`;
+      node.style.width = `${(element.width / streamer.canvasWidth) * 100}%`;
+      node.style.height = `${(element.height / streamer.canvasHeight) * 100}%`;
       const media = node.querySelector<HTMLElement>(".media-element");
       if (media) {
         media.style.clipPath = cropClipPath(getCrop(element), element.width, element.height);
       }
     }
-  }, [displayElements]);
+  }, [displayElements, streamer]);
 
   useEffect(() => {
     for (const element of onAirElements) {
@@ -172,7 +181,7 @@ export function OverlayPage({ token }: { token: string }) {
 
   return (
     <main className="overlay-page">
-      <CanvasStage mode="overlay" streamer={defaultStreamer} elements={displayElements} />
+      <CanvasStage mode="overlay" streamer={streamer} elements={displayElements} />
     </main>
   );
 }

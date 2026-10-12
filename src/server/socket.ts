@@ -17,6 +17,7 @@ import {
 } from "./auth";
 import { accessRevocation } from "./accessRevocation";
 import { canAccessChannel } from "./channelAccess";
+import { withCanvasLock } from "./canvasSettings";
 import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
@@ -29,6 +30,7 @@ import {
   getDefaultStreamer,
   getLiveState,
   getPreviewState,
+  getCanvasRevision,
   removeExpiredLiveInstances,
   removeLiveInstance,
   removePreviewElement,
@@ -37,6 +39,7 @@ import {
   updatePreviewElement,
   writeAudit
 } from "./state";
+import { toStreamerView } from "./state";
 
 type SocketContext =
   | {
@@ -58,6 +61,14 @@ const socketEventLimiter = new WindowRateLimiter(300, 10_000);
 const socketTransformLimiter = new WindowRateLimiter(900, 10_000);
 const socketTransformBurstLimiter = new WindowRateLimiter(120, 1_000);
 const previewIdsByStreamer = new Map<string, Set<string>>();
+let canvasIo: Server | null = null;
+
+export async function broadcastCanvasState(streamerId: string): Promise<void> {
+  if (!canvasIo) return;
+  const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
+  canvasIo.to(moderatorRoom(streamerId)).to(overlayRoom(streamerId)).emit("canvas:state", toStreamerView(channel));
+  await emitPreviewState(canvasIo, streamerId);
+}
 
 setInterval(() => {
   socketConnectionLimiter.prune();
@@ -81,6 +92,7 @@ export function configureSocket(httpServer: HttpServer): Server {
       credentials: true
     }
   });
+  canvasIo = io;
 
   io.use(async (socket, next) => {
     const token = readStringQuery(socket.handshake.query.overlayToken);
@@ -212,6 +224,7 @@ export function configureSocket(httpServer: HttpServer): Server {
     void cleanupExpiredAndBroadcast(io);
   }, 5_000).unref();
   httpServer.once("close", () => {
+    if (canvasIo === io) canvasIo = null;
     clearInterval(cleanupTimer);
     clearAllTimers();
   });
@@ -237,10 +250,14 @@ async function handleOverlayConnection(
   });
   socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
   socket.on("tts:error", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, false));
-  const state = await getPreviewState(streamerId);
-  if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
-  if (!socket.connected) return;
-  socket.emit("overlay:state", state);
+  await withCanvasLock(streamerId, async () => {
+    const state = await getPreviewState(streamerId);
+    const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
+    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
+    if (!socket.connected) return;
+    socket.emit("canvas:state", toStreamerView(channel));
+    socket.emit("overlay:state", state);
+  });
   emitPresence(io, streamerId);
 }
 
@@ -261,10 +278,16 @@ async function handleModeratorConnection(
     emitPresence(io, streamerId);
   });
 
-  const initialPreview = await getPreviewState(streamerId);
-  if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
-  socket.emit("preview:state", initialPreview);
-  socket.emit("live:state", await getLiveState(streamerId));
+  await withCanvasLock(streamerId, async () => {
+    const initialPreview = await getPreviewState(streamerId);
+    const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
+    socket.data.canvasRevision = getCanvasRevision(channel);
+    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
+    if (!socket.connected) return;
+    socket.emit("canvas:state", toStreamerView(channel));
+    socket.emit("preview:state", initialPreview);
+    socket.emit("live:state", await getLiveState(streamerId));
+  });
   if (!socket.connected) return;
   emitPresence(io, streamerId);
   let transformOrdinal = 0;
@@ -273,7 +296,11 @@ async function handleModeratorConnection(
 
   socket.on("preview:add", async (payload) => {
     await guarded(socket, user, "canEditPreview", async (user) => {
-      const parsed = previewAddSchema.parse(payload);
+      await withCanvasLock(streamerId, async () => {
+      await assertCanvasRevision(socket, streamerId, payload);
+      const addPayload = { ...payload };
+      delete addPayload.revision;
+      const parsed = previewAddSchema.parse(addPayload);
       if (parsed.type === "TEXT") {
         assertAllowed(user, "canCreateText");
       }
@@ -294,19 +321,25 @@ async function handleModeratorConnection(
       });
       await writeAudit(streamerId, user.id, "preview.added", { previewId: created.id });
       await emitPreviewState(io, streamerId);
+      });
     });
   });
 
   socket.on("preview:update", async (payload, acknowledge) => {
     transformEpoch += 1;
     const ok = await guarded(socket, user, "canEditPreview", async () => {
+      await withCanvasLock(streamerId, async () => {
+      await assertCanvasRevision(socket, streamerId, payload);
+      const updatePayload = { ...payload };
+      delete updatePayload.revision;
       const parsed = idSchema
         .extend({
           patch: elementPatchSchema
         })
-        .parse(payload);
+        .parse(updatePayload);
       await updatePreviewElement(streamerId, parsed.id, parsed.patch);
       await emitPreviewState(io, streamerId);
+      });
     });
     if (typeof acknowledge === "function") acknowledge(ok);
   });
@@ -324,7 +357,11 @@ async function handleModeratorConnection(
       user,
       "canEditPreview",
       async () => {
-        const transform = elementTransformSchema.parse(payload);
+        await withCanvasLock(streamerId, async () => {
+        await assertCanvasRevision(socket, streamerId, payload);
+        const transformPayload = { ...payload };
+        delete transformPayload.revision;
+        const transform = elementTransformSchema.parse(transformPayload);
         if (!previewIdsByStreamer.get(streamerId)?.has(transform.id)) {
           throw new Error("Element not found");
         }
@@ -332,6 +369,7 @@ async function handleModeratorConnection(
         forwardedTransformOrdinal = ordinal;
         io.to(overlayRoom(streamerId)).volatile.emit("overlay:transform", transform);
         socket.to(moderatorRoom(streamerId)).volatile.emit("preview:transform", transform);
+        });
       },
       false
     );
@@ -340,19 +378,29 @@ async function handleModeratorConnection(
 
   socket.on("preview:duplicate", async (payload) => {
     await guarded(socket, user, "canEditPreview", async (user) => {
-      const parsed = idSchema.parse(payload);
+      await withCanvasLock(streamerId, async () => {
+      await assertCanvasRevision(socket, streamerId, payload);
+      const { revision: _revision, ...duplicatePayload } = payload;
+      void _revision;
+      const parsed = idSchema.parse(duplicatePayload);
       const created = await duplicatePreviewElement(streamerId, parsed.id);
       await writeAudit(streamerId, user.id, "preview.duplicated", { previewId: created.id });
       await emitPreviewState(io, streamerId);
+      });
     });
   });
 
   socket.on("preview:remove", async (payload) => {
     await guarded(socket, user, "canEditPreview", async (user) => {
-      const parsed = idSchema.parse(payload);
+      await withCanvasLock(streamerId, async () => {
+      await assertCanvasRevision(socket, streamerId, payload);
+      const { revision: _revision, ...removePayload } = payload;
+      void _revision;
+      const parsed = idSchema.parse(removePayload);
       await removePreviewElement(streamerId, parsed.id);
       await writeAudit(streamerId, user.id, "preview.removed", { previewId: parsed.id });
       await emitPreviewState(io, streamerId);
+      });
     });
   });
 
@@ -455,6 +503,13 @@ async function guarded(
   } catch (error) {
     socket.emit("app:error", error instanceof Error ? error.message : "Action failed");
     return false;
+  }
+}
+
+async function assertCanvasRevision(socket: Socket, streamerId: string, payload: { revision?: unknown }): Promise<void> {
+  const current = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
+  if ((payload?.revision ?? socket.data.canvasRevision) !== getCanvasRevision(current)) {
+    throw new Error("Canvas resolution changed; reload the editor state");
   }
 }
 

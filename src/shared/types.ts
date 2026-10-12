@@ -57,9 +57,19 @@ export interface StreamerView {
   displayName: string;
   canvasWidth: number;
   canvasHeight: number;
+  canvasRevision: string;
   overlayToken?: string;
   twitchLogin?: string | null;
   twitchBroadcasterId?: string | null;
+}
+
+export type CanvasChangeMode = "keep" | "scale";
+
+export interface CanvasSettingsInput {
+  width: number;
+  height: number;
+  mode: CanvasChangeMode;
+  expectedRevision: string;
 }
 
 export type EmoteProviderName = "twitch" | "7tv" | "custom";

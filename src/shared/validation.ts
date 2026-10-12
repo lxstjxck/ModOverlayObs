@@ -5,6 +5,15 @@ export const animationSchema = z
   .enum(["none", "fade", "scale", "slide-left", "slide-right", "slide-up", "slide-down"])
   .default("none");
 
+export const canvasSettingsSchema = z.object({
+  width: z.number().int().min(320).max(7680),
+  height: z.number().int().min(320).max(7680),
+  mode: z.enum(["keep", "scale"]),
+  expectedRevision: z.string().min(1).max(64)
+}).strict().refine(({ width, height }) => width / height >= 0.25 && width / height <= 4, {
+  message: "Canvas aspect ratio must be between 1:4 and 4:1"
+});
+
 export const elementPatchSchema = z
   .object({
     name: z.string().min(1).max(160).optional(),

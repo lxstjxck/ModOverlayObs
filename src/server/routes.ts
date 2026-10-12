@@ -9,6 +9,7 @@ import {
   twitchChannelSchema,
   customEmoteSchema
 } from "../shared/validation";
+import { canvasSettingsSchema } from "../shared/validation";
 import {
   createSession,
   destroySession,
@@ -30,6 +31,8 @@ import { clientIp, createRateLimitMiddleware } from "./security";
 import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
 import { twitchAuthRouter } from "./twitchAuth";
 import { canAccessChannel } from "./channelAccess";
+import { CanvasConflictError, CanvasGeometryError, saveCanvasSettings } from "./canvasSettings";
+import { broadcastCanvasState } from "./socket";
 import {
   deleteStoredUpload,
   uploadErrorHandler,
@@ -467,6 +470,34 @@ export function createAppRouter(): express.Router {
       canvasWidth: streamer.canvasWidth,
       canvasHeight: streamer.canvasHeight
     });
+  });
+
+  router.put("/channels/:channelId/canvas", async (request, response) => {
+    const channelId = readRouteParam(request.params.channelId);
+    const channel = (request as unknown as AuthenticatedRequest).channel;
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (!channelId || channelId !== channel.id) {
+      response.status(403).json({ error: "Channel access denied" }); return;
+    }
+    if (!session || session.authMethod !== "TWITCH" || session.twitchMode !== "streamer" ||
+        channel.ownerUserId !== session.user.id || !session.user.twitchUserId) {
+      response.status(403).json({ error: "Verified Twitch owner required" }); return;
+    }
+    const parsed = canvasSettingsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: "Invalid canvas dimensions or mode" }); return;
+    }
+    try {
+      const updated = await saveCanvasSettings(channelId, session.user.id, parsed.data);
+      await broadcastCanvasState(channelId);
+      response.json({ streamer: toStreamerView(updated) });
+    } catch (error) {
+      if (error instanceof CanvasConflictError || error instanceof CanvasGeometryError) {
+        response.status(error instanceof CanvasConflictError ? 409 : 422).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   });
 
   router.post(

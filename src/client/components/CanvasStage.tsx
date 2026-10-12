@@ -61,6 +61,7 @@ export function CanvasStage({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const panDrag = useRef<PanDrag | null>(null);
+  const activeDragCleanup = useRef<(() => void) | null>(null);
   const spacePressed = useRef(false);
   const zoomRef = useRef(1);
   const wheelCenterRef = useRef<{ x: number; y: number } | null>(null);
@@ -78,6 +79,8 @@ export function CanvasStage({
     streamer.canvasHeight
   );
   const scale = fitScale * zoom;
+
+  useEffect(() => () => activeDragCleanup.current?.(), []);
 
   useEffect(() => {
     if (mode !== "workspace") return;
@@ -279,6 +282,15 @@ export function CanvasStage({
     const currentTarget = event.currentTarget;
     currentTarget.setPointerCapture(pointerId);
     let latestPatch: Partial<OverlayElement> | null = null;
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+      if (currentTarget.hasPointerCapture(pointerId)) currentTarget.releasePointerCapture(pointerId);
+      if (activeDragCleanup.current === cleanup) activeDragCleanup.current = null;
+    };
+    activeDragCleanup.current?.();
+    activeDragCleanup.current = cleanup;
 
     function handleMove(moveEvent: PointerEvent) {
       if (moveEvent.pointerId !== pointerId) return;
@@ -347,10 +359,7 @@ export function CanvasStage({
       handleMove(upEvent);
       if (latestPatch) onCommitUpdate?.(drag.id, latestPatch, drag.original);
       setSnapGuides(null);
-      currentTarget.releasePointerCapture(pointerId);
-      window.removeEventListener("pointermove", handleMove);
-      window.removeEventListener("pointerup", handleUp);
-      window.removeEventListener("pointercancel", handleUp);
+      cleanup();
     }
 
     window.addEventListener("pointermove", handleMove);

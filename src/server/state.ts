@@ -28,10 +28,20 @@ export function toStreamerView(streamer: Streamer, includeToken = false): Stream
     displayName: streamer.displayName,
     canvasWidth: streamer.canvasWidth,
     canvasHeight: streamer.canvasHeight,
+    canvasRevision: getCanvasRevision(streamer),
     twitchLogin: streamer.twitchLogin,
     twitchBroadcasterId: streamer.twitchBroadcasterId,
     overlayToken: includeToken ? streamer.overlayToken : undefined
   };
+}
+
+export function getCanvasRevision(streamer: Pick<Streamer, "settingsJson">): string {
+  try {
+    const settings = JSON.parse(streamer.settingsJson) as Record<string, unknown>;
+    return typeof settings.canvasRevision === "string" ? settings.canvasRevision : "0";
+  } catch {
+    return "0";
+  }
 }
 
 export function toMediaItem(media: Media & { uploadedBy?: User | null }): MediaItem {

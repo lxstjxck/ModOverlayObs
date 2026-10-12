@@ -804,6 +804,72 @@ it("resolves an eblo.id post server-side and checks the resolved media permissio
 });
 
 describe("realtime access revocation", () => {
+  it("changes canvas atomically for the Twitch owner and updates open editors and OBS", async () => {
+    const owner = await prisma.user.create({ data: { username: "twitch:canvas-owner", displayName: "Canvas owner", passwordHash: "!", twitchUserId: "canvas-owner" } });
+    await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: owner.id, twitchBroadcasterId: "canvas-owner" } });
+    const { encryptOAuthToken } = await import("../src/server/channelAccess");
+    await prisma.twitchOAuthConnection.create({ data: { userId: owner.id, mode: "streamer", encryptedAccess: encryptOAuthToken("access"), encryptedRefresh: encryptOAuthToken("refresh"), scopesJson: "[]", expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date() } });
+    await prisma.session.create({ data: { userId: owner.id, tokenHash: hashSessionToken("canvas-owner-session"), authMethod: "TWITCH", twitchMode: "streamer", expiresAt: new Date(Date.now() + 3600_000) } });
+    const preview = await prisma.previewElement.create({ data: { streamerId, type: "IMAGE", name: "Outside", x: -120, y: 100, width: 300, height: 200, rotation: 37, propsJson: JSON.stringify({ cropLeft: 20, cropRight: 10, cropTop: 5, cropBottom: 15 }) } });
+    const live = await prisma.liveInstance.create({ data: { streamerId, type: "IMAGE", name: "Live", x: 1600, y: 900, width: 200, height: 100, rotation: -20, propsJson: JSON.stringify({ cropLeft: 10 }) } });
+    const editorA = await socketClient({ session: "owner-session" });
+    const editorB = await socketClient({ session: "mod-session" });
+    const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const authHeaders = { ...headers("canvas-owner-session"), "Content-Type": "application/json", "X-Channel-Id": streamerId };
+    const read = async () => (await (await fetch(`${baseUrl}/api/auth/me`, { headers: authHeaders })).json()) as { streamer: { canvasRevision: string; canvasWidth: number; canvasHeight: number } };
+    const initial = (await read()).streamer;
+    const save = (width: number, height: number, mode: string, revision: string, requestHeaders = authHeaders) => fetch(`${baseUrl}/api/channels/${streamerId}/canvas`, { method: "PUT", headers: requestHeaders, body: JSON.stringify({ width, height, mode, expectedRevision: revision }) });
+    expect((await save(2560, 1440, "scale", initial.canvasRevision, { ...headers("mod-session"), "Content-Type": "application/json", "X-Channel-Id": streamerId })).status).toBe(403);
+    expect((await save(2560, 1440, "scale", initial.canvasRevision, { ...authHeaders, "X-Channel-Id": "foreign" })).status).toBe(403);
+    for (const [width, height] of [[0, 1080], [1920.5, 1080], [9000, 1080], [300, 300], [7680, 320]]) {
+      expect((await save(width, height, "keep", initial.canvasRevision)).status).toBe(400);
+    }
+    const aResize = event<{ canvasWidth: number; canvasHeight: number }>(editorA, "canvas:state");
+    const bResize = event<{ canvasWidth: number; canvasHeight: number }>(editorB, "canvas:state");
+    const obsResize = event<{ canvasWidth: number; canvasHeight: number }>(overlay, "canvas:state");
+    const canonical = event<Array<{ id: string; x: number }>>(overlay, "overlay:state");
+    expect((await save(2560, 1440, "scale", initial.canvasRevision)).status).toBe(200);
+    expect(await aResize).toMatchObject({ canvasWidth: 2560, canvasHeight: 1440 });
+    expect(await bResize).toMatchObject({ canvasWidth: 2560, canvasHeight: 1440 });
+    expect(await obsResize).toMatchObject({ canvasWidth: 2560, canvasHeight: 1440 });
+    expect((await canonical).find((item) => item.id === preview.id)?.x).toBe(-160);
+    const stale = event<string>(editorA, "app:error");
+    editorA.emit("preview:update", { id: preview.id, patch: { x: 999 } });
+    expect(await stale).toContain("Canvas resolution changed");
+    const scaled = await prisma.previewElement.findUniqueOrThrow({ where: { id: preview.id } });
+    expect(scaled).toMatchObject({ x: -160, width: 400, rotation: 37 });
+    expect(scaled.y).toBeCloseTo(133.33333333333331);
+    const crop = JSON.parse(scaled.propsJson) as { cropLeft: number; cropTop: number };
+    expect(crop.cropLeft).toBeCloseTo(26.666666666666664);
+    expect(crop.cropTop).toBeCloseTo(6.666666666666666);
+    expect((await prisma.liveInstance.findUniqueOrThrow({ where: { id: live.id } })).x).toBeCloseTo(2133.333333333333);
+    expect((await save(2560, 1440, "scale", initial.canvasRevision)).status).toBe(409);
+    const beforeRename = (await read()).streamer.canvasRevision;
+    await prisma.streamer.update({ where: { id: streamerId }, data: { displayName: "Renamed" } });
+    const second = (await read()).streamer;
+    expect(second.canvasRevision).toBe(beforeRename);
+    expect((await save(1080, 1920, "keep", second.canvasRevision)).status).toBe(200);
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: preview.id } })).x).toBe(-160);
+    const third = (await read()).streamer;
+    expect((await save(1920, 1080, "keep", third.canvasRevision)).status).toBe(200);
+    const fourth = (await read()).streamer;
+    expect((await save(1080, 1920, "scale", fourth.canvasRevision)).status).toBe(200);
+    const portrait = await prisma.previewElement.findUniqueOrThrow({ where: { id: preview.id } });
+    expect(portrait.x).toBeCloseTo(-160 * 1080 / 1920);
+    expect(portrait.y).toBeCloseTo(scaled.y * 1920 / 1080);
+    expect(portrait.rotation).toBe(37);
+    const fifth = (await read()).streamer;
+    expect((await save(1000, 1500, "scale", fifth.canvasRevision)).status).toBe(200);
+    expect((await read()).streamer).toMatchObject({ canvasWidth: 1000, canvasHeight: 1500 });
+    const obsSetup = await fetch(`${baseUrl}/api/obs`, { headers: authHeaders });
+    expect(await obsSetup.json()).toMatchObject({ canvasWidth: 1000, canvasHeight: 1500 });
+    await prisma.previewElement.create({ data: { streamerId, type: "TEXT", name: "Tiny", width: 8, height: 8 } });
+    const beforeRejected = await prisma.previewElement.findUniqueOrThrow({ where: { id: preview.id } });
+    expect((await save(320, 480, "scale", (await read()).streamer.canvasRevision)).status).toBe(422);
+    expect((await read()).streamer).toMatchObject({ canvasWidth: 1000, canvasHeight: 1500 });
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: preview.id } })).x).toBe(beforeRejected.x);
+    expect((await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } })).overlayToken).toBe("overlay-old");
+  });
   it("isolates Twitch and 7TV failures while keeping custom emotes", async () => {
     const streamer = await prisma.streamer.update({
       where: { id: streamerId },

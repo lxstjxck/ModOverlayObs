@@ -231,6 +231,14 @@ input[type="color"] {
   min-width: 0;
 }
 
+.canvas-settings .field { text-transform: none; }
+.canvas-settings select, .canvas-settings input { width: 100%; }
+.canvas-size-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.canvas-proportion { height: 170px; display: grid; place-items: center; border: 1px solid #303741; background: #101419; }
+.canvas-proportion svg { width: 90%; height: 90%; }
+.canvas-save-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.canvas-warning { color: #ffc977; }
+
 .twitch-profile,
 .twitch-person {
   display: flex;

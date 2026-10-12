@@ -57,6 +57,8 @@ export function ModeratorApp() {
   const [mediaDeleteIds, setMediaDeleteIds] = useState<string[]>([]);
   const [deletingMedia, setDeletingMedia] = useState(false);
   const socketRef = useRef<Socket | null>(null);
+  const canvasRevisionRef = useRef("");
+  const canvasRefreshPending = useRef(false);
   const pendingPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const inFlightPreviewPatches = useRef(new Map<string, Partial<OverlayElement>>());
   const previewPatchTimers = useRef(new Map<string, number>());
@@ -80,6 +82,7 @@ export function ModeratorApp() {
         }
         setUser(me.user);
         setStreamer(me.streamer);
+        canvasRevisionRef.current = me.streamer.canvasRevision;
         const mediaResult = await api<MediaResponse>("/api/media");
         setMedia(mediaResult.media);
       } catch (bootError) {
@@ -103,10 +106,27 @@ export function ModeratorApp() {
     const channelId = /^\/channel\/([^/]+)$/.exec(window.location.pathname)?.[1];
     const socket = io({ path: "/socket.io", query: channelId ? { channelId: decodeURIComponent(channelId) } : undefined });
     socketRef.current = socket;
+    socket.on("canvas:state", (value: StreamerView) => {
+      if (canvasRevisionRef.current !== value.canvasRevision) {
+        canvasRefreshPending.current = true;
+        history.current = { undo: [], redo: [] };
+        for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
+        previewPatchTimers.current.clear();
+        pendingPreviewPatches.current.clear();
+        inFlightPreviewPatches.current.clear();
+        transientPatches.current.clear();
+        for (const timer of transformTimers.current.values()) window.clearTimeout(timer);
+        transformTimers.current.clear();
+        setPreview([]);
+      }
+      canvasRevisionRef.current = value.canvasRevision;
+      setStreamer(value);
+    });
     socket.on("access:revoked", () => {
       window.location.href = channelId ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/login";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
+      canvasRefreshPending.current = false;
       if (
         previewRef.current.length > 0 &&
         (previewRef.current.length !== state.length ||
@@ -378,7 +398,10 @@ export function ModeratorApp() {
       setError("Canvas editing requires permission to edit and control the live overlay.");
       return;
     }
-    socketRef.current?.emit(event, payload);
+    if (canvasRefreshPending.current) return;
+    if (["preview:add", "preview:duplicate", "preview:remove"].includes(event) && payload && typeof payload === "object") {
+      socketRef.current?.emit(event, { ...payload, revision: canvasRevisionRef.current });
+    } else socketRef.current?.emit(event, payload);
   }
 
   function recordHistory(entry: HistoryEntry) {
@@ -429,7 +452,7 @@ export function ModeratorApp() {
       setError("Canvas editing requires permission to edit and control the live overlay.");
       return;
     }
-    if (!socketRef.current?.connected) {
+    if (!socketRef.current?.connected || canvasRefreshPending.current) {
       setError("No server connection. Wait for reconnection before editing.");
       return;
     }
@@ -447,7 +470,7 @@ export function ModeratorApp() {
   }
 
   function updateTransformLocal(id: string, patch: Partial<OverlayElement>) {
-    if (!canEditCanvas || !socketRef.current?.connected) return;
+    if (!canEditCanvas || !socketRef.current?.connected || canvasRefreshPending.current) return;
     setPreview((items) =>
       items.map((item) => (item.id === id ? mergeElementPatch(item, patch) : item))
     );
@@ -459,13 +482,14 @@ export function ModeratorApp() {
       lastTransformSent.current.set(id, performance.now());
       const payload = {
         id,
+        revision: canvasRevisionRef.current,
         x: latest.x,
         y: latest.y,
         width: latest.width,
         height: latest.height,
         rotation: latest.rotation,
         crop: cropFromProps(latest.props)
-      } satisfies ElementTransform;
+      } satisfies ElementTransform & { revision: string };
       if (import.meta.env.DEV && performance.now() - lastDebugPing.current > 1000) {
         lastDebugPing.current = performance.now();
         const started = performance.now();
@@ -525,7 +549,7 @@ export function ModeratorApp() {
         inFlightPreviewPatches.current.set(id, nextPatch);
         socket
           .timeout(10000)
-          .emit("preview:update", { id, patch: nextPatch }, (error: Error | null, ok: boolean) => {
+          .emit("preview:update", { id, patch: nextPatch, revision: canvasRevisionRef.current }, (error: Error | null, ok: boolean) => {
             if (inFlightPreviewPatches.current.get(id) !== nextPatch) return;
             inFlightPreviewPatches.current.delete(id);
             if (error || !ok) {
@@ -716,6 +740,7 @@ export function ModeratorApp() {
             </span>
           </div>
           <CanvasStage
+            key={streamer.canvasRevision}
             mode="workspace"
             streamer={streamer}
             elements={preview}
