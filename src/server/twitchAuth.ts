@@ -14,7 +14,7 @@ import {
   requireTwitchAuth
 } from "./auth";
 import { clientIp, createRateLimitMiddleware } from "./security";
-import { canAccessChannel, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators } from "./channelAccess";
+import { canAccessChannel, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators, verifyStreamerIdentity } from "./channelAccess";
 import { getDefaultStreamer } from "./state";
 
 const stateCookie = "mod_overlay_twitch_state";
@@ -304,13 +304,72 @@ export function twitchAuthRouter(): express.Router {
     });
   });
 
+  router.post("/channels", requireTwitchAuth, async (request, response) => {
+    const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
+    if (session.twitchMode !== "streamer") {
+      response.status(403).json({ error: "Verified streamer session required" });
+      return;
+    }
+    try {
+      if (!(await verifyStreamerIdentity(session.user.id, session.user.twitchUserId!))) {
+        response.status(403).json({ error: "Twitch identity could not be verified. Sign in again." });
+        return;
+      }
+      const existing = await prisma.streamer.findUnique({ where: { ownerUserId: session.user.id } });
+      if (existing) {
+        response.setHeader("Cache-Control", "no-store");
+        response.json({ channel: { id: existing.id } });
+        return;
+      }
+      let created = true;
+      const channel = await prisma.streamer.create({
+        data: {
+          displayName: session.user.displayName,
+          twitchBroadcasterId: session.user.twitchUserId!,
+          twitchLogin: session.user.twitchLogin,
+          ownerUserId: session.user.id,
+          overlayToken: crypto.randomBytes(32).toString("hex"),
+          canvasWidth: 1920,
+          canvasHeight: 1080,
+          settingsJson: "{}"
+        }
+      }).catch(async (error: unknown) => {
+        const owned = await prisma.streamer.findUnique({ where: { ownerUserId: session.user.id } });
+        if (owned) { created = false; return owned; }
+        throw error;
+      });
+      // Moderator synchronization is allowed to fail closed; channel creation remains durable.
+      await syncModerators(channel.id).catch(() => undefined);
+      response.setHeader("Cache-Control", "no-store");
+      response.status(created ? 201 : 200).json({ channel: { id: channel.id } });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "P2002") {
+        response.status(409).json({ error: "This Twitch channel is already connected" });
+      } else {
+        response.status(503).json({ error: "Could not verify or connect the Twitch channel" });
+      }
+    }
+  });
+
   router.get("/channels", requireTwitchAuth, async (request, response) => {
     const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
     try {
-      const channels = session.twitchMode === "moderator"
-        ? await getModeratedChannels(session.user.id)
-        : new Set([session.user.twitchUserId!]);
-      const profiles = await getTwitchProfiles(session.user.id, session.twitchMode as TwitchMode, [...channels]);
+      let channels = new Set([session.user.twitchUserId!]);
+      if (session.twitchMode === "moderator") {
+        try { channels = await getModeratedChannels(session.user.id); }
+        catch {
+          const snapshots = await prisma.channelModeratorSnapshot.findMany({
+            where: { checkedAt: { gt: new Date(Date.now() - 15 * 60_000) } },
+            include: { channel: { select: { twitchBroadcasterId: true } } }
+          });
+          channels = new Set(snapshots.filter((snapshot) => {
+            try { return (JSON.parse(snapshot.userIdsJson) as string[]).includes(session.user.twitchUserId!); }
+            catch { return false; }
+          }).map((snapshot) => snapshot.channel.twitchBroadcasterId).filter((id): id is string => Boolean(id)));
+          if (channels.size === 0) throw new Error("Twitch access verification unavailable");
+        }
+      }
+      const profiles = await getTwitchProfiles(session.user.id, session.twitchMode as TwitchMode, [...channels]).catch(() => []);
       const linked = await prisma.streamer.findMany({
         where: { twitchBroadcasterId: { in: [...channels] }, ownerUserId: { not: null } },
         select: { id: true, displayName: true, twitchLogin: true, twitchBroadcasterId: true, ownerUserId: true }

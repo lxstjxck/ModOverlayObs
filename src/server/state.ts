@@ -1,5 +1,4 @@
 import type { LiveInstance, Media, PreviewElement, Streamer, User } from "@prisma/client";
-import crypto from "node:crypto";
 import type { MediaItem, OverlayElement, StreamerView } from "../shared/types";
 import { prisma } from "./db";
 
@@ -9,16 +8,7 @@ type PreviewPatch = Partial<Omit<OverlayElement, "id" | "previewElementId" | "pr
 
 export async function getDefaultStreamer(): Promise<Streamer> {
   const streamer = await prisma.streamer.findFirst({ orderBy: { createdAt: "asc" } });
-  if (!streamer) {
-    return prisma.streamer.create({
-      data: {
-        displayName: "Default Streamer",
-        overlayToken: crypto.randomBytes(32).toString("hex"),
-        canvasWidth: 1920,
-        canvasHeight: 1080
-      }
-    });
-  }
+  if (!streamer) throw new Error("Legacy channel unavailable");
   return streamer;
 }
 

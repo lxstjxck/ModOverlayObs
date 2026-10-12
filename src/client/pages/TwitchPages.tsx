@@ -70,6 +70,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [changingModerator, setChangingModerator] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
 
   async function load(currentMode: TwitchMode) {
     setLoading(true);
@@ -202,6 +203,20 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     window.location.replace("/login");
   }
 
+  async function connectChannel() {
+    if (connecting) return;
+    setConnecting(true);
+    setError("");
+    try {
+      await api("/api/auth/twitch/channels", { method: "POST" });
+      await load("streamer");
+    } catch (connectError) {
+      setError(connectError instanceof Error ? connectError.message : "Не удалось подключить канал");
+    } finally {
+      setConnecting(false);
+    }
+  }
+
   return (
     <main className="login-page">
       <div className="login-form twitch-dashboard">
@@ -235,12 +250,10 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
                       ? "проверяется"
                       : "не привязан"}
                 </p>
-                {!streamerChannel && !loading && !error && (
-                  <p>
-                    Для привязки существующего канала выйдите из Twitch, войдите в{" "}
-                    <a href="/legacy-login">legacy OWNER</a> и запустите привязку Twitch из этого
-                    сеанса.
-                  </p>
+                {!streamerChannel && !loading && (
+                  <button className="primary" type="button" disabled={connecting} onClick={() => void connectChannel()}>
+                    {connecting ? "Подключаем…" : "Подключить канал"}
+                  </button>
                 )}
                 {ownChannel?.id && (
                   <>
@@ -274,6 +287,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
                         </p>
                       </section>
                     )}
+                    <p>TTS для новых Twitch-каналов пока недоступен. Для существующего legacy-канала настройте TTS через старую панель OBS Setup.</p>
                     {canvas && <section className="canvas-settings">
                       <h2>Настройки холста</h2>
                       <label className="field">Разрешение

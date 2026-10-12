@@ -7,7 +7,7 @@ import express from "express";
 import type { Server } from "socket.io";
 import { z } from "zod";
 import type { TtsSetupView } from "../shared/types";
-import { hashSessionToken, readSessionToken, requireAuth, type AuthenticatedRequest } from "./auth";
+import { getSessionFromCookieHeader, hashSessionToken, readSessionToken, requireAuth, type AuthenticatedRequest } from "./auth";
 import { config } from "./config";
 import { prisma } from "./db";
 import { getDefaultStreamer, writeAudit } from "./state";
@@ -23,7 +23,7 @@ type StoredTwitch = {
   rewardId: string | null;
   rewardCost: number;
 };
-type TtsJob = { text: string; userId: string; redemptionId?: string };
+type TtsJob = { text: string; userId: string; streamerId: string; redemptionId?: string };
 type ActiveJob = { id: string; file: string; socketId: string; job: TtsJob; timer: NodeJS.Timeout };
 
 const oauthStates = new Map<string, { sessionHash: string; expiresAt: number }>();
@@ -163,6 +163,14 @@ function ownerOnly(request: Request, response: Response, next: () => void): void
 export function ttsRouter(): express.Router {
   const router = express.Router();
   router.get("/audio/:id", (request, response) => sendTtsAudio(request, response, active));
+  router.use(async (request, response, next) => {
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (session?.authMethod === "TWITCH") {
+      response.status(503).json({ error: "TTS for new Twitch channels is not available yet. Existing legacy channel TTS is unchanged." });
+      return;
+    }
+    next();
+  });
   router.get("/", requireAuth, ownerOnly, async (_request, response) => {
     const settings = await loadTwitch().catch(() => null);
     const view: TtsSetupView = {
@@ -529,7 +537,7 @@ async function handleTwitchMessage(
       const text = moderatorTtsText(event as TwitchChatMessage, settings.broadcasterId);
       if (text && typeof event.chatter_user_id === "string") {
         debugTts("chat command accepted");
-        enqueue({ text, userId: event.chatter_user_id });
+        enqueue({ text, userId: event.chatter_user_id, streamerId: streamer.id });
       } else if (chatCommand) {
         debugTts("chat command ignored: role or command format");
       }
@@ -545,7 +553,7 @@ async function handleTwitchMessage(
       )
         return;
       const text = redemptionTtsText(event, settings.broadcasterId, settings.rewardId);
-      if (!text || !enqueue({ text, userId: event.user_id, redemptionId: event.id }))
+      if (!text || !enqueue({ text, userId: event.user_id, streamerId: streamer.id, redemptionId: event.id }))
         void settleReward(event.id, "CANCELED");
     }
   } catch {
@@ -558,12 +566,7 @@ async function handleTwitchMessage(
 function enqueue(job: TtsJob): boolean {
   const now = Date.now();
   for (const [id, time] of lastUsed) if (now - time > 10 * 60_000) lastUsed.delete(id);
-  const streamerId = io
-    ? Array.from(io.sockets.adapter.rooms.keys()).find(
-        (room) => room.startsWith("streamer:") && room.endsWith(":overlay")
-      )
-    : null;
-  if (!streamerId || !io?.sockets.adapter.rooms.get(streamerId)?.size) {
+  if (!io?.sockets.adapter.rooms.get(`streamer:${job.streamerId}:overlay`)?.size) {
     debugTts("job rejected: no connected overlay");
     return false;
   }
@@ -571,11 +574,12 @@ function enqueue(job: TtsJob): boolean {
     debugTts("job rejected: queue full");
     return false;
   }
-  if (now - (lastUsed.get(job.userId) ?? 0) < 30_000) {
+  const cooldownKey = `${job.streamerId}:${job.userId}`;
+  if (now - (lastUsed.get(cooldownKey) ?? 0) < 30_000) {
     debugTts("job rejected: cooldown");
     return false;
   }
-  lastUsed.set(job.userId, now);
+  lastUsed.set(cooldownKey, now);
   queue.push(job);
   debugTts("job queued");
   void processQueue();
@@ -591,7 +595,8 @@ async function processQueue(): Promise<void> {
   let phase = "preparing";
   try {
     const streamer = await getDefaultStreamer();
-    const target = io.sockets.adapter.rooms.get(`streamer:${streamer.id}:overlay`)?.values().next()
+    if (streamer.id !== job.streamerId) throw new Error("TTS channel changed");
+    const target = io.sockets.adapter.rooms.get(`streamer:${job.streamerId}:overlay`)?.values().next()
       .value as string | undefined;
     if (!target) throw new Error("OBS disconnected");
     phase = "generating";

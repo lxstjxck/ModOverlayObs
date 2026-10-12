@@ -80,6 +80,31 @@ async function accessToken(userId: string, mode: "streamer" | "moderator", force
   try { return await operation; } finally { refreshes.delete(key); }
 }
 
+export async function verifyStreamerIdentity(userId: string, twitchUserId: string): Promise<boolean> {
+  let token = await accessToken(userId, "streamer");
+  let response = await fetch("https://id.twitch.tv/oauth2/validate", {
+    headers: { Authorization: `OAuth ${token}` }, signal: AbortSignal.timeout(8000)
+  });
+  if (response.status === 401) {
+    token = await accessToken(userId, "streamer", true);
+    response = await fetch("https://id.twitch.tv/oauth2/validate", {
+      headers: { Authorization: `OAuth ${token}` }, signal: AbortSignal.timeout(8000)
+    });
+  }
+  if (response.status === 401 || response.status === 403) {
+    await revokeConnection(userId, "streamer");
+    return false;
+  }
+  if (!response.ok) throw new Error("Twitch identity verification unavailable");
+  const identity = await response.json() as { client_id?: string; user_id?: string; scopes?: string[] };
+  if (identity.client_id !== config.twitchClientId || identity.user_id !== twitchUserId ||
+      !identity.scopes?.includes("moderation:read")) {
+    await revokeConnection(userId, "streamer");
+    return false;
+  }
+  return true;
+}
+
 async function twitchPages(userId: string, mode: "streamer" | "moderator", endpoint: string, idKey: string): Promise<Set<string>> {
   let token = await accessToken(userId, mode);
   let cursor: string | undefined;

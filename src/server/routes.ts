@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import crypto from "node:crypto";
 import path from "node:path";
+import type { Streamer } from "@prisma/client";
 import { z } from "zod";
 import {
   loginSchema,
@@ -86,7 +87,6 @@ export function createAppRouter(): express.Router {
       return;
     }
 
-    const streamer = await getDefaultStreamer();
     const user = await prisma.user.findUnique({
       where: { username: parsed.data.username }
     });
@@ -95,14 +95,18 @@ export function createAppRouter(): express.Router {
       user.twitchUserId ||
       !(await bcrypt.compare(parsed.data.password, user.passwordHash))
     ) {
-      await writeAudit(streamer.id, user?.id ?? null, "auth.login_failed", {
-        username: parsed.data.username,
-        ip: clientIp(request)
-      });
+      if (await prisma.user.count({ where: { twitchUserId: null } })) {
+        const streamer = await getDefaultStreamer();
+        await writeAudit(streamer.id, user?.id ?? null, "auth.login_failed", {
+          username: parsed.data.username,
+          ip: clientIp(request)
+        });
+      }
       response.status(401).json({ error: "Invalid username or password" });
       return;
     }
 
+    const streamer = await getDefaultStreamer();
     const csrfToken = await createSession(user.id, response);
     await writeAudit(streamer.id, user.id, "auth.login_success", { ip: clientIp(request) });
     response.json({ user: toUserView(user), streamer: toStreamerView(streamer), csrfToken });
@@ -456,15 +460,17 @@ export function createAppRouter(): express.Router {
 
   router.get("/streamer", async (request, response) => {
     const session = await getSessionFromCookieHeader(request.headers.cookie);
-    if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
     const streamer = (request as AuthenticatedRequest).channel;
+    if (!isChannelOwner(session, streamer)) { response.status(403).json({ error: "Owner access required" }); return; }
+    response.setHeader("Cache-Control", "private, no-store");
     response.json({ streamer: toStreamerView(streamer, true) });
   });
 
   router.get("/obs", async (request, response) => {
     const session = await getSessionFromCookieHeader(request.headers.cookie);
-    if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
     const streamer = (request as AuthenticatedRequest).channel;
+    if (!isChannelOwner(session, streamer)) { response.status(403).json({ error: "Owner access required" }); return; }
+    response.setHeader("Cache-Control", "private, no-store");
     response.json({
       overlayUrl: buildOverlayUrl(request, streamer.overlayToken),
       canvasWidth: streamer.canvasWidth,
@@ -505,8 +511,8 @@ export function createAppRouter(): express.Router {
     requirePermission("canClearLive"),
     async (request, response) => {
       const session = await getSessionFromCookieHeader(request.headers.cookie);
-      if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
       const streamer = (request as AuthenticatedRequest).channel;
+      if (!isChannelOwner(session, streamer)) { response.status(403).json({ error: "Owner access required" }); return; }
       const { updated, previousToken } = await prisma.$transaction(
         async (tx) => {
           const current = await tx.streamer.findUniqueOrThrow({ where: { id: streamer.id } });
@@ -525,6 +531,7 @@ export function createAppRouter(): express.Router {
         (request as AuthenticatedRequest).user.id,
         "overlay.token.regenerated"
       );
+      response.setHeader("Cache-Control", "private, no-store");
       response.json({
         overlayUrl: buildOverlayUrl(request, updated.overlayToken),
         canvasWidth: updated.canvasWidth,
@@ -534,6 +541,16 @@ export function createAppRouter(): express.Router {
   );
 
   return router;
+}
+
+function isChannelOwner(
+  session: Awaited<ReturnType<typeof getSessionFromCookieHeader>>,
+  channel: Streamer
+): boolean {
+  if (!session) return false;
+  return session.authMethod === "LEGACY"
+    ? session.user.role === "OWNER"
+    : session.twitchMode === "streamer" && channel.ownerUserId === session.user.id;
 }
 
 class UploadQuotaError extends Error {

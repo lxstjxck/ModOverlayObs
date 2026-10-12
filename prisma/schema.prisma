@@ -105,7 +105,7 @@ model Streamer {
   liveInstances       LiveInstance[]
   auditLogs           AuditLog[]
   twitchLogin         String?
-  twitchBroadcasterId String?
+  twitchBroadcasterId String?          @unique
   ownerUserId         String?          @unique
   owner               User?            @relation(fields: [ownerUserId], references: [id], onDelete: Restrict)
   moderatorSnapshot   ChannelModeratorSnapshot?

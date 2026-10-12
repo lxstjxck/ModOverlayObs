@@ -3,14 +3,15 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { config } from "./config";
+import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import { defaultPermissionsByRole } from "../shared/types";
 import { cleanupStaleTtsFiles } from "./ttsFiles";
 
 export async function ensureRuntimeState(): Promise<void> {
   const userCount = await prisma.user.count();
-  if (userCount === 0) {
+  const createLegacyOwner = userCount === 0 && Boolean(config.initialAdminPassword.trim());
+  if (userCount === 0 && (createLegacyOwner || !twitchOnlyConfigured())) {
     const password = config.initialAdminPassword;
     if (password.trim().length < 12 || password.trim() === "change-me-now") {
       throw new Error(
@@ -29,7 +30,8 @@ export async function ensureRuntimeState(): Promise<void> {
   });
 
   const streamerCount = await prisma.streamer.count();
-  if (streamerCount === 0) {
+  const hasLegacyUser = createLegacyOwner || await prisma.user.count({ where: { twitchUserId: null } }) > 0;
+  if (streamerCount === 0 && hasLegacyUser) {
     await prisma.streamer.create({
       data: {
         displayName: "Default Streamer",
@@ -40,7 +42,7 @@ export async function ensureRuntimeState(): Promise<void> {
     });
   }
 
-  if (userCount === 0) {
+  if (createLegacyOwner) {
     const passwordHash = await bcrypt.hash(config.initialAdminPassword, 12);
     await prisma.user.create({
       data: {
@@ -52,4 +54,15 @@ export async function ensureRuntimeState(): Promise<void> {
       }
     });
   }
+}
+
+function twitchOnlyConfigured(): boolean {
+  try {
+    const redirect = new URL(config.twitchOAuthRedirectUri);
+    return Boolean(config.twitchClientId && config.twitchClientSecret &&
+      /^[0-9a-f]{64}$/i.test(config.oauthTokenEncryptionKey) &&
+      redirect.pathname === "/api/auth/twitch/callback" && !redirect.search && !redirect.hash &&
+      (redirect.protocol === "https:" ||
+        (!isProduction && redirect.protocol === "http:" && ["localhost", "127.0.0.1"].includes(redirect.hostname))));
+  } catch { return false; }
 }
