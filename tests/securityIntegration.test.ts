@@ -111,7 +111,7 @@ function event<T = unknown>(socket: Socket, name: string): Promise<T> {
 }
 
 async function socketClient(
-  options: { session?: string; overlayToken?: string },
+  options: { session?: string; overlayToken?: string; channelId?: string },
   expected = "live:state"
 ) {
   const socket = connect(baseUrl, {
@@ -119,7 +119,7 @@ async function socketClient(
     reconnection: false,
     autoConnect: false,
     extraHeaders: options.session ? { Cookie: headers(options.session).Cookie } : undefined,
-    query: options.overlayToken ? { overlayToken: options.overlayToken } : undefined
+    query: options.overlayToken ? { overlayToken: options.overlayToken } : options.channelId ? { channelId: options.channelId } : undefined
   });
   clients.push(socket);
   const ready = event(socket, expected);
@@ -346,10 +346,10 @@ it.each(["streamer", "moderator"] as const)(
     expect(identity.mode).toBe(mode);
     expect(
       (await fetch(`${baseUrl}/api/auth/me`, { headers: { Cookie: sessionCookie } })).status
-    ).toBe(401);
+    ).toBe(403);
     expect(
       (await fetch(`${baseUrl}/api/media`, { headers: { Cookie: sessionCookie } })).status
-    ).toBe(401);
+    ).toBe(403);
     const deniedSocket = connect(baseUrl, {
       transports: ["websocket"],
       reconnection: false,
@@ -359,7 +359,7 @@ it.each(["streamer", "moderator"] as const)(
     clients.push(deniedSocket);
     const socketError = event<Error>(deniedSocket, "connect_error");
     deniedSocket.connect();
-    expect((await socketError).message).toBe("Authentication required");
+    expect((await socketError).message).toBe("Channel access denied");
     expect(
       (await fetch(callback, { headers: { Cookie: stateCookie }, redirect: "manual" })).headers.get(
         "location"
@@ -467,6 +467,10 @@ it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates 
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = String(input);
     if (!url.startsWith("https://api.twitch.tv/")) return realFetch(input, init);
+    if (url.includes("/users?")) {
+      const ids = new URL(url).searchParams.getAll("id");
+      return Promise.resolve(new Response(JSON.stringify({ data: ids.map((id) => ({ id, login: `user${id}`, display_name: `User ${id}`, profile_image_url: `https://static-cdn.jtvnw.net/user-${id}.png` })) }), { status: 200 }));
+    }
     const first = !url.includes("after=next");
     const moderators = url.includes("/moderators");
     const data = moderators
@@ -479,9 +483,43 @@ it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates 
   expect(await syncModerators(streamerId)).toContain("67890");
   expect(await canAccessChannel(session, streamerId)).toBe(true);
   expect(await canAccessChannel(session, second.id)).toBe(false);
+  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: headers("twitch-mod") })).status).toBe(403);
+  const editorHeaders = { ...headers("twitch-mod"), "x-channel-id": streamerId };
+  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: editorHeaders })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: editorHeaders })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/api/obs`, { headers: editorHeaders })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("twitch-owner"), "x-channel-id": streamerId } })).status).toBe(200);
+  await prisma.media.create({ data: { streamerId, filename: "mod-access.png", originalName: "mod-access.png", mimeType: "image/png", type: "IMAGE", size: png.length, url: "/uploads/mod-access.png" } });
+  await fs.writeFile(path.join(config.uploadDir, "mod-access.png"), png);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { headers: headers("twitch-mod") })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { method: "HEAD", headers: headers("twitch-mod") })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { headers: { ...headers("twitch-mod"), Range: "bytes=0-3" } })).status).toBe(206);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: { ...editorHeaders, "x-channel-id": second.id } })).status).toBe(403);
+  const picker = await fetch(`${baseUrl}/api/auth/twitch/channels`, { headers: headers("twitch-mod") });
+  expect(picker.status).toBe(200);
+  expect(await picker.json()).toMatchObject({ channels: [{ status: "unconnected" }, { id: streamerId, status: "connected" }] });
+  const moderatorList = await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/moderators`, { headers: headers("twitch-owner") });
+  expect(moderatorList.status).toBe(200);
+  expect(await moderatorList.json()).toEqual(expect.objectContaining({ moderators: expect.arrayContaining([expect.objectContaining({ twitchUserId: "67890", banned: false })]) }));
+  const otherOwner = await prisma.user.findUniqueOrThrow({ where: { twitchUserId: "99999" } });
+  const otherChannel = await prisma.streamer.create({ data: { displayName: "Other channel", overlayToken: "other-overlay-token", ownerUserId: otherOwner.id, twitchBroadcasterId: "99999" } });
+  await prisma.twitchOAuthConnection.create({ data: { userId: otherOwner.id, mode: "streamer", encryptedAccess: encryptOAuthToken("access"), encryptedRefresh: encryptOAuthToken("refresh"), scopesJson: "[]", expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date() } });
+  await syncModerators(otherChannel.id);
+  const liveSocket = await socketClient({ session: "twitch-mod", channelId: streamerId });
+  const otherSocket = await socketClient({ session: "twitch-mod", channelId: otherChannel.id });
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-mod") })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${second.id}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-owner") })).status).toBe(403);
+  const revoked = event(liveSocket, "access:revoked");
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "PUT", headers: headers("twitch-owner") })).status).toBe(200);
+  await revoked;
+  expect(otherSocket.connected).toBe(true);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: { ...headers("twitch-mod"), "x-channel-id": otherChannel.id } })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { headers: headers("twitch-mod") })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { method: "HEAD", headers: headers("twitch-mod") })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/uploads/mod-access.png`, { headers: { ...headers("twitch-mod"), Range: "bytes=0-3" } })).status).toBe(404);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: editorHeaders })).status).toBe(403);
+  const deniedPicker = await fetch(`${baseUrl}/api/auth/twitch/channels`, { headers: headers("twitch-mod") });
+  expect(await deniedPicker.json()).toMatchObject({ channels: [{ id: otherChannel.id, status: "connected" }, { id: streamerId, status: "denied" }] });
   expect(await canAccessChannel(session, streamerId)).toBe(false);
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${streamerId}/bans/${mod.id}`, { method: "DELETE", headers: headers("twitch-owner") })).status).toBe(200);
   await setModeratorBan(streamerId, owner.id, mod.id, true);
@@ -508,6 +546,7 @@ it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates 
   expect((await fetch(`${baseUrl}/uploads/foreign.png`, { headers: { ...headers(), Range: "bytes=0-3" } })).status).toBe(404);
   expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=overlay-old`)).status).toBe(404);
   expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=foreign-token`)).status).toBe(200);
+  expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=foreign-token`, { headers: headers("twitch-mod") })).status).toBe(200);
   expect((await fetch(`${baseUrl}/api/media`, { headers: { ...headers(), "x-channel-id": second.id } })).status).toBe(403);
 });
 

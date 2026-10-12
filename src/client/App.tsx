@@ -2,7 +2,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ModeratorApp } from "./pages/ModeratorApp";
 import { ObsSetupPage } from "./pages/ObsSetupPage";
 import { OverlayPage } from "./pages/OverlayPage";
-import { TwitchLandingPage, TwitchPlaceholderPage } from "./pages/TwitchPages";
+import { TwitchLandingPage, TwitchDashboardPage } from "./pages/TwitchPages";
 
 export function App() {
   const path = window.location.pathname;
@@ -16,10 +16,11 @@ export function App() {
     return <LoginPage />;
   }
   if (path === "/streamer" || path === "/channels") {
-    return <TwitchPlaceholderPage mode={path === "/streamer" ? "streamer" : "moderator"} />;
+    return <TwitchDashboardPage mode={path === "/streamer" ? "streamer" : "moderator"} />;
   }
   if (path === "/obs-setup") {
     return <ObsSetupPage />;
   }
-  return <ModeratorApp />;
+  if (path === "/app" || /^\/channel\/[^/]+$/.test(path)) return <ModeratorApp />;
+  return <TwitchLandingPage />;
 }

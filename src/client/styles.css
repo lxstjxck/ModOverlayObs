@@ -214,6 +214,44 @@ input[type="color"] {
   background: #1d9770;
 }
 
+.twitch-dashboard {
+  width: min(860px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.twitch-dashboard section {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid #303741;
+}
+
+.twitch-dashboard .copy-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.twitch-profile,
+.twitch-person {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.twitch-profile img,
+.twitch-person img {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.twitch-person label {
+  margin-left: auto;
+}
+
 .moderator-app {
   height: 100%;
   display: grid;

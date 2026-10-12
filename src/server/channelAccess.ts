@@ -120,6 +120,28 @@ export async function getModeratedChannels(userId: string): Promise<Set<string>>
   return twitchPages(userId, "moderator", "moderation/channels", "user_id");
 }
 
+export async function getTwitchProfiles(userId: string, mode: "streamer" | "moderator", ids: string[]): Promise<Array<{ id: string; login: string; displayName: string; avatarUrl: string }>> {
+  const profiles: Array<{ id: string; login: string; displayName: string; avatarUrl: string }> = [];
+  for (let index = 0; index < ids.length; index += 100) {
+    const url = new URL("https://api.twitch.tv/helix/users");
+    for (const id of ids.slice(index, index + 100)) url.searchParams.append("id", id);
+    let token = await accessToken(userId, mode);
+    let response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
+    if (response.status === 401) {
+      token = await accessToken(userId, mode, true);
+      response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
+    }
+    if (response.status === 401 || response.status === 403) { await revokeConnection(userId, mode); throw new Error("Twitch authorization revoked"); }
+    if (!response.ok) throw new Error("Twitch profiles unavailable");
+    const body = await response.json() as { data?: Array<{ id?: string; login?: string; display_name?: string; profile_image_url?: string }> };
+    if (!Array.isArray(body.data)) throw new Error("Invalid Twitch profiles");
+    for (const row of body.data) if (row.id && ids.includes(row.id) && row.login && row.display_name) profiles.push({
+      id: row.id, login: row.login, displayName: row.display_name, avatarUrl: row.profile_image_url ?? ""
+    });
+  }
+  return profiles;
+}
+
 export async function syncModerators(channelId: string): Promise<Set<string>> {
   const pending = syncs.get(channelId);
   if (pending) return pending;
@@ -134,7 +156,7 @@ export async function syncModerators(channelId: string): Promise<Set<string>> {
       update: { userIdsJson: JSON.stringify([...ids]), checkedAt: new Date() }
     });
     if (previous) {
-      for (const id of JSON.parse(previous.userIdsJson) as string[]) if (!ids.has(id)) accessRevocation.emit("twitchUser", id);
+      for (const id of JSON.parse(previous.userIdsJson) as string[]) if (!ids.has(id)) accessRevocation.emit("channelTwitchUser", channelId, id);
     }
     return ids;
   })();
@@ -180,5 +202,5 @@ export async function setModeratorBan(channelId: string, ownerUserId: string, mo
   if (channel?.ownerUserId !== ownerUserId || moderatorUserId === ownerUserId) throw new Error("Permission denied");
   if (banned) await prisma.channelModeratorBan.upsert({ where: { channelId_userId: { channelId, userId: moderatorUserId } }, create: { channelId, userId: moderatorUserId }, update: {} });
   else await prisma.channelModeratorBan.deleteMany({ where: { channelId, userId: moderatorUserId } });
-  accessRevocation.emit("user", moderatorUserId);
+  accessRevocation.emit("channelUser", channelId, moderatorUserId);
 }

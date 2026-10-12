@@ -17,6 +17,10 @@ export function setCsrfToken(token: string | null): void {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
+  const editorChannel = /^\/channel\/([^/]+)$/.exec(window.location.pathname)?.[1];
+  if (editorChannel && path.startsWith("/api/") && !headers.has("X-Channel-Id")) {
+    headers.set("X-Channel-Id", decodeURIComponent(editorChannel));
+  }
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }

@@ -14,7 +14,7 @@ import {
   destroySession,
   getCsrfTokenFromRequest,
   getSessionFromCookieHeader,
-  requireAuth,
+  requireEditorAuth,
   requirePermission,
   toUserView,
   type AuthenticatedRequest
@@ -114,20 +114,10 @@ export function createAppRouter(): express.Router {
     response.json({ ok: true });
   });
 
-  // The legacy editor has one channel context until the channel picker is shipped.
-  router.use(async (request, response, next) => {
-    const session = await getSessionFromCookieHeader(request.headers.cookie);
-    if (!session || session.authMethod !== "LEGACY") { response.status(401).json({ error: "Authentication required" }); return; }
-    const channel = await getDefaultStreamer();
-    const requested = request.get("x-channel-id") ?? request.query.channelId;
-    if ((requested && requested !== channel.id) || !(await canAccessChannel(session, channel.id))) {
-      response.status(403).json({ error: "Channel access denied" }); return;
-    }
-    next();
-  });
+  router.use(requireEditorAuth);
 
-  router.get("/auth/me", requireAuth, async (request, response) => {
-    const streamer = await getDefaultStreamer();
+  router.get("/auth/me", async (request, response) => {
+    const streamer = (request as AuthenticatedRequest).channel;
     response.json({
       user: toUserView((request as AuthenticatedRequest).user),
       streamer: toStreamerView(streamer),
@@ -135,19 +125,18 @@ export function createAppRouter(): express.Router {
     });
   });
 
-  router.get("/media", requireAuth, async (_request, response) => {
-    const streamer = await getDefaultStreamer();
+  router.get("/media", async (request, response) => {
+    const streamer = (request as AuthenticatedRequest).channel;
     response.json({ media: await listMedia(streamer.id) });
   });
 
-  router.get("/emotes", requireAuth, async (request, response) => {
-    const streamer = await getDefaultStreamer();
+  router.get("/emotes", async (request, response) => {
+    const streamer = (request as AuthenticatedRequest).channel;
     response.json(await getChannelEmotes(streamer, request.query.refresh === "1"));
   });
 
   router.patch(
     "/streamer/twitch",
-    requireAuth,
     requirePermission("canEditPreview"),
     emoteMutationLimit,
     async (request, response) => {
@@ -156,7 +145,7 @@ export function createAppRouter(): express.Router {
         response.status(400).json({ error: "Invalid Twitch login" });
         return;
       }
-      const streamer = await getDefaultStreamer();
+      const streamer = (request as AuthenticatedRequest).channel;
       if (streamer.ownerUserId) {
         response.status(409).json({ error: "Bound Twitch identity cannot be changed here" });
         return;
@@ -183,7 +172,6 @@ export function createAppRouter(): express.Router {
 
   router.post(
     "/emotes/custom",
-    requireAuth,
     requirePermission("canUploadImage"),
     emoteMutationLimit,
     async (request, response) => {
@@ -192,7 +180,7 @@ export function createAppRouter(): express.Router {
         response.status(400).json({ error: "Invalid emote URL or name" });
         return;
       }
-      const streamer = await getDefaultStreamer();
+      const streamer = (request as AuthenticatedRequest).channel;
       try {
         const emote = await createCustomEmote(
           streamer.id,
@@ -216,7 +204,6 @@ export function createAppRouter(): express.Router {
 
   router.delete(
     "/emotes/custom/:id",
-    requireAuth,
     requirePermission("canDeleteMedia"),
     emoteMutationLimit,
     async (request, response) => {
@@ -225,7 +212,7 @@ export function createAppRouter(): express.Router {
         response.status(400).json({ error: "Invalid emote id" });
         return;
       }
-      const streamer = await getDefaultStreamer();
+      const streamer = (request as AuthenticatedRequest).channel;
       const result = await prisma.customEmote.deleteMany({
         where: { id, streamerId: streamer.id }
       });
@@ -243,7 +230,7 @@ export function createAppRouter(): express.Router {
     }
   );
 
-  router.post("/media/url", requireAuth, uploadRateLimit, async (request, response) => {
+  router.post("/media/url", uploadRateLimit, async (request, response) => {
     const parsed = mediaUrlSchema.safeParse(request.body);
     if (!parsed.success) {
       response.status(400).json({ error: "Invalid media URL" });
@@ -296,7 +283,7 @@ export function createAppRouter(): express.Router {
       return;
     }
 
-    const streamer = await getDefaultStreamer();
+    const streamer = (request as AuthenticatedRequest).channel;
     const mediaUrl = new URL(resolved?.url ?? parsed.data.url);
     const fallbackName = decodeURIComponent(
       mediaUrl.pathname.split("/").filter(Boolean).pop() ?? ""
@@ -334,7 +321,6 @@ export function createAppRouter(): express.Router {
 
   router.post(
     "/media",
-    requireAuth,
     uploadRateLimit,
     uploadMiddleware.single("file"),
     async (request, response) => {
@@ -363,7 +349,7 @@ export function createAppRouter(): express.Router {
           return;
         }
 
-        const streamer = await getDefaultStreamer();
+        const streamer = (request as AuthenticatedRequest).channel;
         const stored = upload;
         const media = await withUploadCommit(() =>
           prisma.$transaction(
@@ -421,7 +407,7 @@ export function createAppRouter(): express.Router {
     }
   );
 
-  router.patch("/media/:id", requireAuth, async (request, response) => {
+  router.patch("/media/:id", async (request, response) => {
     const mediaId = readRouteParam(request.params.id);
     if (!mediaId) {
       response.status(400).json({ error: "Invalid media id" });
@@ -434,7 +420,7 @@ export function createAppRouter(): express.Router {
       response.status(400).json({ error: "Invalid media name" });
       return;
     }
-    const streamer = await getDefaultStreamer();
+    const streamer = (request as unknown as AuthenticatedRequest).channel;
     const media = await prisma.media.update({
       where: { id: mediaId, streamerId: streamer.id },
       data: { originalName: body.data.originalName },
@@ -445,7 +431,6 @@ export function createAppRouter(): express.Router {
 
   router.delete(
     "/media/:id",
-    requireAuth,
     requirePermission("canDeleteMedia"),
     async (request, response) => {
       const mediaId = readRouteParam(request.params.id);
@@ -453,7 +438,7 @@ export function createAppRouter(): express.Router {
         response.status(400).json({ error: "Invalid media id" });
         return;
       }
-      const streamer = await getDefaultStreamer();
+      const streamer = (request as AuthenticatedRequest).channel;
       const media = await prisma.media.delete({
         where: { id: mediaId, streamerId: streamer.id }
       });
@@ -466,13 +451,17 @@ export function createAppRouter(): express.Router {
     }
   );
 
-  router.get("/streamer", requireAuth, async (_request, response) => {
-    const streamer = await getDefaultStreamer();
+  router.get("/streamer", async (request, response) => {
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
+    const streamer = (request as AuthenticatedRequest).channel;
     response.json({ streamer: toStreamerView(streamer, true) });
   });
 
-  router.get("/obs", requireAuth, async (request, response) => {
-    const streamer = await getDefaultStreamer();
+  router.get("/obs", async (request, response) => {
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
+    const streamer = (request as AuthenticatedRequest).channel;
     response.json({
       overlayUrl: buildOverlayUrl(request, streamer.overlayToken),
       canvasWidth: streamer.canvasWidth,
@@ -482,10 +471,11 @@ export function createAppRouter(): express.Router {
 
   router.post(
     "/obs/regenerate",
-    requireAuth,
     requirePermission("canClearLive"),
     async (request, response) => {
-      const streamer = await getDefaultStreamer();
+      const session = await getSessionFromCookieHeader(request.headers.cookie);
+      if (session?.authMethod === "TWITCH" && session.twitchMode !== "streamer") { response.status(403).json({ error: "Owner access required" }); return; }
+      const streamer = (request as AuthenticatedRequest).channel;
       const { updated, previousToken } = await prisma.$transaction(
         async (tx) => {
           const current = await tx.streamer.findUniqueOrThrow({ where: { id: streamer.id } });
@@ -538,8 +528,10 @@ export function configureUploads(app: express.Express): void {
       }
       const filename = decodeURIComponent(request.path.slice(1));
       const media = await prisma.media.findUnique({ where: { filename } });
-      if (!media || (streamer && media.streamerId !== streamer.id) ||
-        (session && (session.authMethod !== "LEGACY" || !(await canAccessChannel(session, media.streamerId))))) {
+      if (!media || !(
+        (streamer && media.streamerId === streamer.id) ||
+        (session && await canAccessChannel(session, media.streamerId))
+      )) {
         response.status(404).end();
         return;
       }

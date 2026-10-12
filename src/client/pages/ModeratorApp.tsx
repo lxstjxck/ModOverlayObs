@@ -83,8 +83,8 @@ export function ModeratorApp() {
         const mediaResult = await api<MediaResponse>("/api/media");
         setMedia(mediaResult.media);
       } catch (bootError) {
-        if (bootError instanceof ApiError && bootError.status === 401) {
-          window.location.href = "/login";
+        if (bootError instanceof ApiError && (bootError.status === 401 || (bootError.status === 403 && window.location.pathname.startsWith("/channel/")))) {
+          window.location.href = window.location.pathname.startsWith("/channel/") ? "/channels" : "/login";
           return;
         }
         setError(bootError instanceof Error ? bootError.message : "Could not load app");
@@ -100,10 +100,11 @@ export function ModeratorApp() {
     if (!user) {
       return undefined;
     }
-    const socket = io({ path: "/socket.io" });
+    const channelId = /^\/channel\/([^/]+)$/.exec(window.location.pathname)?.[1];
+    const socket = io({ path: "/socket.io", query: channelId ? { channelId: decodeURIComponent(channelId) } : undefined });
     socketRef.current = socket;
     socket.on("access:revoked", () => {
-      window.location.href = "/login";
+      window.location.href = channelId ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/login";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
       if (
@@ -313,8 +314,7 @@ export function ModeratorApp() {
   if (!user || !streamer) {
     return (
       <main className="loading-page">
-        <RefreshCw className="spin" size={24} />
-        Loading Moderator Overlay
+        {error ? <div className="error-box">{error}</div> : <><RefreshCw className="spin" size={24} />Loading Moderator Overlay</>}
       </main>
     );
   }
@@ -624,10 +624,10 @@ export function ModeratorApp() {
           <button
             className="setup-link"
             type="button"
-            onClick={() => (window.location.href = "/obs-setup")}
+            onClick={() => (window.location.href = window.location.pathname.startsWith("/channel/") ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup")}
           >
             <ClipboardList size={16} />
-            OBS Setup
+            {window.location.pathname.startsWith("/channel/") ? "К списку каналов" : "OBS Setup"}
           </button>
           <button
             className="logout-button"

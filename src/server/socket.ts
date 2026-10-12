@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
+import type { User } from "@prisma/client";
 import type { PermissionFlag, PresenceState } from "../shared/types";
 import {
   elementPatchSchema,
@@ -10,7 +11,6 @@ import {
   previewAddSchema
 } from "../shared/validation";
 import {
-  getUserFromCookieHeader,
   getSessionFromCookieHeader,
   readSessionToken,
   hashSessionToken
@@ -42,7 +42,7 @@ type SocketContext =
   | {
       kind: "moderator";
       streamerId: string;
-      user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>;
+      user: User;
     }
   | {
       kind: "overlay";
@@ -103,9 +103,13 @@ export function configureSocket(httpServer: HttpServer): Server {
       const context = contexts.get(socket);
       if (context?.kind === "moderator" && context.user.id === userId) revoke();
     };
-    const onTwitchUserRevoked = (twitchUserId: string) => {
+    const onTwitchUserRevoked = (channelId: string, twitchUserId: string) => {
       const context = contexts.get(socket);
-      if (context?.kind === "moderator" && context.user.twitchUserId === twitchUserId) revoke();
+      if (context?.kind === "moderator" && context.streamerId === channelId && context.user.twitchUserId === twitchUserId) revoke();
+    };
+    const onChannelUserRevoked = (channelId: string, userId: string) => {
+      const context = contexts.get(socket);
+      if (context?.kind === "moderator" && context.streamerId === channelId && context.user.id === userId) revoke();
     };
     const onChannelRevoked = (channelId: string) => {
       const context = contexts.get(socket);
@@ -115,14 +119,16 @@ export function configureSocket(httpServer: HttpServer): Server {
       accessRevocation.off("session", onSessionRevoked);
       accessRevocation.off("overlay", onOverlayRevoked);
       accessRevocation.off("user", onUserRevoked);
-      accessRevocation.off("twitchUser", onTwitchUserRevoked);
+      accessRevocation.off("channelTwitchUser", onTwitchUserRevoked);
+      accessRevocation.off("channelUser", onChannelUserRevoked);
       accessRevocation.off("channel", onChannelRevoked);
       clearTimeout(expiryTimer);
     };
     accessRevocation.on("session", onSessionRevoked);
     accessRevocation.on("overlay", onOverlayRevoked);
     accessRevocation.on("user", onUserRevoked);
-    accessRevocation.on("twitchUser", onTwitchUserRevoked);
+    accessRevocation.on("channelTwitchUser", onTwitchUserRevoked);
+    accessRevocation.on("channelUser", onChannelUserRevoked);
     accessRevocation.on("channel", onChannelRevoked);
     socket.once("disconnect", cleanup);
     socket.conn.once("close", cleanup);
@@ -156,13 +162,16 @@ export function configureSocket(httpServer: HttpServer): Server {
       }
 
       const session = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
-      if (!session || session.authMethod !== "LEGACY") {
+      if (!session) {
         finish(new Error("Authentication required"));
         return;
       }
-      const streamer = await getDefaultStreamer();
       const requestedChannel = readStringQuery(socket.handshake.query.channelId);
-      if ((requestedChannel && requestedChannel !== streamer.id) || !(await canAccessChannel(session, streamer.id))) {
+      const streamer = session.authMethod === "TWITCH" && requestedChannel
+        ? await prisma.streamer.findUnique({ where: { id: requestedChannel } })
+        : await getDefaultStreamer();
+      if (!streamer || (session.authMethod === "TWITCH" && requestedChannel !== streamer.id) ||
+          (requestedChannel && requestedChannel !== streamer.id) || !(await canAccessChannel(session, streamer.id))) {
         finish(new Error("Channel access denied"));
         return;
       }
@@ -170,7 +179,7 @@ export function configureSocket(httpServer: HttpServer): Server {
         finish(new Error("Session expired"));
         return;
       }
-      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.user });
+      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.authMethod === "TWITCH" ? { ...session.user, role: session.twitchMode === "streamer" ? "OWNER" : "MODERATOR" } : session.user });
       expiryTimer = setTimeout(revoke, Math.max(0, session.expiresAt.getTime() - Date.now()));
       expiryTimer.unref();
       finish();
@@ -239,7 +248,7 @@ async function handleModeratorConnection(
   io: Server,
   socket: Socket,
   streamerId: string,
-  user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>
+  user: User
 ): Promise<void> {
   if (!socket.connected) return;
   socket.join(moderatorRoom(streamerId));
@@ -386,8 +395,9 @@ async function handleModeratorConnection(
 
   socket.on("live:clear", async () => {
     await guarded(socket, user, "canClearLive", async (user) => {
+      const current = await prisma.liveInstance.findMany({ where: { streamerId }, select: { id: true } });
       await clearLiveState(streamerId);
-      clearAllTimers();
+      for (const item of current) clearTimer(item.id);
       await writeAudit(streamerId, user.id, "live.cleared");
       await emitLiveState(io, streamerId);
     });
@@ -418,9 +428,9 @@ async function handleModeratorConnection(
 
 async function guarded(
   socket: Socket,
-  user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>,
+  user: User,
   permission: PermissionFlag,
-  action: (user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>) => Promise<void>,
+  action: (user: User) => Promise<void>,
   applyEventLimit = true
 ): Promise<boolean> {
   try {
@@ -428,8 +438,8 @@ async function guarded(
       socket.emit("app:error", "Too many realtime actions. Slow down and try again.");
       return false;
     }
-    const currentUser = await getUserFromCookieHeader(socket.handshake.headers.cookie);
     const currentSession = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
+    const currentUser = currentSession ? (currentSession.authMethod === "TWITCH" ? { ...currentSession.user, role: currentSession.twitchMode === "streamer" ? "OWNER" as const : "MODERATOR" as const } : currentSession.user) : null;
     const context = contexts.get(socket);
     if (!socket.connected || !currentUser || currentUser.id !== user.id ||
       context?.kind !== "moderator" || !currentSession || !(await canAccessChannel(currentSession, context.streamerId))) {
@@ -449,7 +459,7 @@ async function guarded(
 }
 
 function assertAllowed(
-  user: NonNullable<Awaited<ReturnType<typeof getUserFromCookieHeader>>>,
+  user: User,
   permission: PermissionFlag
 ): void {
   if (!hasPermission(user.role, user.permissionsJson, permission)) {

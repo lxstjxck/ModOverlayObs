@@ -26,6 +26,32 @@ export interface UserView {
   permissions: PermissionMap;
 }
 
+export type TwitchMode = "streamer" | "moderator";
+export type ChannelStatus = "connected" | "unconnected" | "denied" | "error";
+
+export interface TwitchProfileView {
+  id: string;
+  login: string;
+  displayName: string;
+  avatarUrl: string | null;
+}
+
+export interface TwitchChannelView {
+  id: string | null;
+  twitchId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  status: ChannelStatus;
+}
+
+export interface TwitchModeratorView {
+  id: string;
+  twitchUserId: string;
+  displayName: string;
+  twitchAvatarUrl: string | null;
+  banned: boolean;
+}
+
 export interface StreamerView {
   id: string;
   displayName: string;

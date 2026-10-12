@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import express from "express";
 import { parse } from "cookie";
+import type { ChannelStatus, TwitchChannelView, TwitchMode, TwitchModeratorView } from "../shared/types";
 import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import {
@@ -13,10 +14,9 @@ import {
   requireTwitchAuth
 } from "./auth";
 import { clientIp, createRateLimitMiddleware } from "./security";
-import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModeratorBan, syncModerators } from "./channelAccess";
+import { canAccessChannel, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators } from "./channelAccess";
 import { getDefaultStreamer } from "./state";
 
-type TwitchMode = "streamer" | "moderator";
 const stateCookie = "mod_overlay_twitch_state";
 const stateTtlMs = 10 * 60_000;
 const scopes: Record<TwitchMode, string> = {
@@ -310,14 +310,27 @@ export function twitchAuthRouter(): express.Router {
       const channels = session.twitchMode === "moderator"
         ? await getModeratedChannels(session.user.id)
         : new Set([session.user.twitchUserId!]);
+      const profiles = await getTwitchProfiles(session.user.id, session.twitchMode as TwitchMode, [...channels]);
       const linked = await prisma.streamer.findMany({
         where: { twitchBroadcasterId: { in: [...channels] }, ownerUserId: { not: null } },
-        select: { id: true, displayName: true, twitchLogin: true }
+        select: { id: true, displayName: true, twitchLogin: true, twitchBroadcasterId: true, ownerUserId: true }
       });
-      const allowed = [];
-      for (const channel of linked) if (await canAccessChannel(session, channel.id)) allowed.push(channel);
+      const result: TwitchChannelView[] = [];
+      for (const id of channels) {
+        const channel = linked.find((item) => item.twitchBroadcasterId === id);
+        const profile = profiles.find((item) => item.id === id);
+        let status: ChannelStatus = "unconnected";
+        if (channel) {
+          if (session.twitchMode === "moderator" && await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId: channel.id, userId: session.user.id } } })) status = "denied";
+          else {
+            try { status = await canAccessChannel(session, channel.id) ? "connected" : "error"; }
+            catch { status = "error"; }
+          }
+        }
+        result.push({ id: channel?.id ?? null, twitchId: id, displayName: profile?.displayName ?? channel?.displayName ?? id, avatarUrl: profile?.avatarUrl ?? null, status });
+      }
       response.setHeader("Cache-Control", "no-store");
-      response.json({ channels: allowed });
+      response.json({ channels: result });
     } catch {
       response.status(503).json({ error: "Twitch access verification unavailable" });
     }
@@ -333,10 +346,19 @@ export function twitchAuthRouter(): express.Router {
     }
     try {
       const ids = await syncModerators(channelId);
-      const users = await prisma.user.findMany({ where: { twitchUserId: { in: [...ids] } }, select: { id: true, twitchUserId: true, displayName: true } });
+      const profiles = await getTwitchProfiles(session.user.id, "streamer", [...ids]);
+      for (const profile of profiles) await prisma.user.upsert({
+        where: { twitchUserId: profile.id },
+        create: { username: `twitch:${profile.id}`, twitchUserId: profile.id, displayName: profile.displayName, twitchLogin: profile.login, twitchAvatarUrl: profile.avatarUrl, passwordHash: "!twitch-oauth-only" },
+        update: { displayName: profile.displayName, twitchLogin: profile.login, twitchAvatarUrl: profile.avatarUrl }
+      });
+      const users = await prisma.user.findMany({ where: { twitchUserId: { in: [...ids] } }, select: { id: true, twitchUserId: true, displayName: true, twitchAvatarUrl: true } });
       const bans = await prisma.channelModeratorBan.findMany({ where: { channelId }, select: { userId: true } });
       response.setHeader("Cache-Control", "no-store");
-      response.json({ moderators: users.map((user) => ({ ...user, banned: bans.some((ban) => ban.userId === user.id) })) });
+      const moderators: TwitchModeratorView[] = users
+        .filter((user): user is typeof user & { twitchUserId: string } => user.twitchUserId !== null)
+        .map((user) => ({ ...user, banned: bans.some((ban) => ban.userId === user.id) }));
+      response.json({ moderators });
     } catch {
       response.status(503).json({ error: "Twitch access verification unavailable" });
     }

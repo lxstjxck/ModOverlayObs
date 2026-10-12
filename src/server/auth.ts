@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { parse } from "cookie";
 import crypto from "node:crypto";
+import type { Streamer } from "@prisma/client";
 import type { PermissionFlag, UserView } from "../shared/types";
 import { config, isProduction } from "./config";
 import { prisma } from "./db";
@@ -14,6 +15,7 @@ const sessionDays = 7;
 
 export interface AuthenticatedRequest extends Request {
   user: NonNullable<Awaited<ReturnType<typeof getUserFromRequest>>>;
+  channel: Streamer;
 }
 
 export function hashSessionToken(token: string): string {
@@ -130,6 +132,25 @@ export async function requireAuth(
     return;
   }
   (request as AuthenticatedRequest).user = session.user;
+  next();
+}
+
+export async function requireEditorAuth(request: Request, response: Response, next: NextFunction): Promise<void> {
+  const session = await getSessionFromCookieHeader(request.headers.cookie);
+  if (!session) { response.status(401).json({ error: "Authentication required" }); return; }
+  const requested = request.get("x-channel-id") ?? request.query.channelId;
+  const channel = session.authMethod === "TWITCH" && typeof requested === "string"
+    ? await prisma.streamer.findUnique({ where: { id: requested } })
+    : await getDefaultStreamer();
+  if (!channel || (session.authMethod === "TWITCH" && requested !== channel.id) ||
+      (requested && requested !== channel.id) || !(await canAccessChannel(session, channel.id))) {
+    response.status(403).json({ error: "Channel access denied" }); return;
+  }
+  const authorized = request as AuthenticatedRequest;
+  authorized.channel = channel;
+  authorized.user = session.authMethod === "TWITCH"
+    ? { ...session.user, role: session.twitchMode === "streamer" ? "OWNER" : "MODERATOR" }
+    : session.user;
   next();
 }
 
