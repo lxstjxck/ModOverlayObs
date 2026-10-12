@@ -2,6 +2,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { ModeratorApp } from "./pages/ModeratorApp";
 import { ObsSetupPage } from "./pages/ObsSetupPage";
 import { OverlayPage } from "./pages/OverlayPage";
+import { TwitchLoginPage } from "./pages/TwitchLoginPage";
 import { TwitchLandingPage, TwitchDashboardPage } from "./pages/TwitchPages";
 
 export function App() {
@@ -9,9 +10,10 @@ export function App() {
   if (path.startsWith("/overlay/")) {
     return <OverlayPage token={decodeURIComponent(path.replace("/overlay/", ""))} />;
   }
-  if (path === "/" || path === "/login") {
+  if (path === "/") {
     return <TwitchLandingPage />;
   }
+  if (path === "/login") return <TwitchLoginPage />;
   if (path === "/legacy-login") {
     return <LoginPage />;
   }

@@ -334,7 +334,7 @@ export function ModeratorApp() {
   if (!user || !streamer) {
     return (
       <main className="loading-page">
-        {error ? <div className="error-box">{error}</div> : <><RefreshCw className="spin" size={24} />Loading Moderator Overlay</>}
+        {error ? <div className="error-box">{error}</div> : <><RefreshCw className="spin" size={24} />Загружаем LXST Overlay</>}
       </main>
     );
   }
@@ -618,7 +618,7 @@ export function ModeratorApp() {
           </span>
           <span className="brand-copy">
             <strong>
-              MODERATOR <span>OVERLAY</span>
+              LXST <span>OVERLAY</span>
             </strong>
             <small>
               Broadcast Console <span aria-hidden="true">/</span> v{appVersion}
@@ -793,9 +793,6 @@ export function ModeratorApp() {
             onToggle={(id, visible) => patchPreviewLocal(id, { visible })}
           />
         </details>
-        <div className="footer-credit">
-          Made by <strong>lxstjxck</strong>
-        </div>
       </footer>
       {mediaDeleteIds.length > 0 && (
         <div

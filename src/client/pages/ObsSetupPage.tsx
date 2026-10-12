@@ -88,7 +88,7 @@ export function ObsSetupPage() {
             </label>
             <ol>
               <li>Open OBS Studio.</li>
-              <li>Add a Browser Source named Moderator Overlay.</li>
+              <li>Add a Browser Source named LXST Overlay.</li>
               <li>Paste the Overlay URL.</li>
               <li>
                 Set Width = {setup.canvasWidth}, Height = {setup.canvasHeight}.
@@ -162,9 +162,6 @@ export function ObsSetupPage() {
             </div>
           </>
         )}
-        <p className="page-credit">
-          Made by <strong>lxstjxck</strong>
-        </p>
       </section>
     </main>
   );

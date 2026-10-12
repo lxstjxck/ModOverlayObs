@@ -12,44 +12,23 @@ import type {
   TwitchProfileView
 } from "../../shared/types";
 import type { TtsSetupView } from "../../shared/types";
-import { api } from "../api";
-import { BrandMark } from "../components/BrandMark";
+import { ApiError, api } from "../api";
+import { BrandIdentity } from "../components/BrandIdentity";
 import { LandingEditorDemo } from "../components/LandingEditorDemo";
+import { TwitchDashboardView } from "../components/TwitchDashboardView";
 import { ActionLink, FeatureCard, SectionHeading } from "../components/ui/LandingUi";
 
 type TwitchMe = { user: TwitchProfileView; mode: TwitchMode; csrfToken: string };
-const statusText = {
-  connected: "Подключён",
-  unconnected: "Не подключён",
-  denied: "Доступ запрещён",
-  error: "Ошибка проверки"
-};
-const oauthErrors: Record<string, string> = {
-  invalid_state: "Сессия входа истекла. Попробуйте снова.",
-  denied: "Вход через Twitch отменён.",
-  legacy_session: "Выйдите из старой учётной записи перед входом через Twitch.",
-  invalid_response: "Некорректный ответ Twitch.",
-  twitch_unavailable: "Не удалось завершить вход через Twitch."
-};
-
 export function TwitchLandingPage() {
-  const error = new URLSearchParams(window.location.search).get("oauth_error");
   return (
     <main className="landing-page">
       <header className="landing-header landing-shell">
-        <a className="landing-brand" href="/" aria-label="ModOverlayObs — главная">
-          <span className="landing-brand-icon">
-            <BrandMark />
-          </span>
-          <span>
-            ModOverlay<span>Obs</span>
-          </span>
-        </a>
+        <BrandIdentity className="landing-brand" />
         <nav aria-label="Навигация по странице">
           <a href="#how-it-works">Как работает</a>
           <a href="#features">Возможности</a>
         </nav>
-        <a className="landing-header-login" href="/api/auth/twitch/start/streamer">
+        <a className="landing-header-login" href="/login">
           Войти <span>через Twitch</span>
           <span aria-hidden="true"> ↗</span>
         </a>
@@ -69,14 +48,9 @@ export function TwitchLandingPage() {
             Управляйте оверлеем в OBS вместе с модераторами. Изображения, видео, смайлы и текст
             появляются на трансляции тогда, когда это нужно.
           </p>
-          {error && (
-            <div className="landing-error" role="alert">
-              {oauthErrors[error] ?? "Ошибка авторизации."}
-            </div>
-          )}
           <div className="landing-hero-actions">
-            <ActionLink href="/api/auth/twitch/start/streamer">Войти через Twitch</ActionLink>
-            <a className="landing-text-link" href="/api/auth/twitch/start/moderator">
+            <ActionLink href="/login">Войти через Twitch</ActionLink>
+            <a className="landing-text-link" href="/login">
               Я модератор <span aria-hidden="true">↗</span>
             </a>
           </div>
@@ -167,15 +141,15 @@ export function TwitchLandingPage() {
             <p>Подключите Twitch и настройте свой оверлей для OBS.</p>
           </div>
           <div className="landing-cta-actions">
-            <ActionLink href="/api/auth/twitch/start/streamer">Войти через Twitch</ActionLink>
-            <a href="/api/auth/twitch/start/moderator">Вход для модератора ↗</a>
+            <ActionLink href="/login">Войти через Twitch</ActionLink>
+            <a href="/login">Вход для модератора ↗</a>
           </div>
         </div>
       </section>
       <footer className="landing-footer landing-shell">
-        <span>ModOverlayObs</span>
+        <span>LXST Overlay</span>
         <span>Оверлей для OBS и вашей команды.</span>
-        <a href="/legacy-login">Вход по паролю</a>
+        <span>Created by <a href="https://github.com/lxstjxck" target="_blank" rel="noopener noreferrer">lxstjxck</a></span>
       </footer>
     </main>
   );
@@ -194,7 +168,6 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   const [sourceHeight, setSourceHeight] = useState("");
   const [savingCanvas, setSavingCanvas] = useState(false);
   const [presence, setPresence] = useState<PresenceState | null>(null);
-  const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [changingModerator, setChangingModerator] = useState<string | null>(null);
@@ -262,7 +235,33 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     mode === "streamer"
       ? channels.find((channel) => channel.status === "connected" && channel.id)
       : null;
-  const streamerChannel = mode === "streamer" ? channels[0] : null;
+  useEffect(() => {
+    if (mode !== "moderator" || !me) return;
+    let mounted = true;
+    const refresh = () => {
+      if (document.visibilityState === "hidden") return;
+      void api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels")
+        .then((result) => { if (mounted) { setChannels(result.channels); setError(""); } })
+        .catch((refreshError: unknown) => {
+          if (!mounted) return;
+          if (refreshError instanceof ApiError && refreshError.status === 401) {
+            window.location.replace("/login");
+            return;
+          }
+          if (refreshError instanceof ApiError && refreshError.status === 403) setChannels([]);
+          setError(refreshError instanceof Error ? refreshError.message : "Не удалось обновить список каналов");
+        });
+    };
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [mode, me?.user.id]);
   useEffect(() => {
     if (!ownChannel?.id) return;
     setSourceWidth(window.localStorage.getItem(`obs-width:${ownChannel.id}`) ?? "");
@@ -391,219 +390,23 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     }
   }
 
-  return (
-    <main className="login-page">
-      <div className="login-form twitch-dashboard">
-        <div className="brand-mark">
-          <BrandMark />
-        </div>
-        <h1>{mode === "streamer" ? "Панель стримера" : "Каналы модератора"}</h1>
-        {me ? (
-          <>
-            <div className="twitch-profile">
-              {me.user.avatarUrl && <img src={me.user.avatarUrl} alt="" />}
-              <span>
-                {me.user.displayName} (@{me.user.login})
-              </span>
-            </div>
-            <button type="button" onClick={() => void load(mode)} disabled={loading}>
-              {loading ? "Обновляем…" : "Обновить список"}
-            </button>
-            {error && (
-              <div className="error-box" role="alert">
-                {error}
-              </div>
-            )}
-            {mode === "streamer" && (
-              <>
-                <p>
-                  Канал:{" "}
-                  {streamerChannel
-                    ? statusText[streamerChannel.status]
-                    : loading
-                      ? "проверяется"
-                      : "не привязан"}
-                </p>
-                {!streamerChannel && !loading && (
-                  <button className="primary" type="button" disabled={connecting} onClick={() => void connectChannel()}>
-                    {connecting ? "Подключаем…" : "Подключить канал"}
-                  </button>
-                )}
-                {ownChannel?.id && (
-                  <>
-                    <p>
-                      <a href={`/channel/${encodeURIComponent(ownChannel.id)}`}>Открыть редактор</a>
-                    </p>
-                    {obs && (
-                      <section>
-                        <h2>OBS Browser Source</h2>
-                        <div className="copy-row">
-                          <input aria-label="OBS Overlay URL" value={obs.overlayUrl} readOnly />
-                          <button
-                            type="button"
-                            onClick={() => void navigator.clipboard.writeText(obs.overlayUrl)}
-                          >
-                            Копировать
-                          </button>
-                        </div>
-                        <p>
-                          Добавьте Browser Source в OBS, вставьте URL и задайте размер{" "}
-                          {obs.canvasWidth} × {obs.canvasHeight}. Храните URL как секрет.
-                        </p>
-                        <p>
-                          Соединение overlay:{" "}
-                          {presence
-                            ? presence.overlayConnected
-                              ? "подключено"
-                              : "не подключено"
-                            : "проверяется"}
-                          . Это статус браузерного клиента, а не подтверждение показа сцены в OBS.
-                        </p>
-                      </section>
-                    )}
-                    {tts && <section className="tts-setup">
-                      <h2>Twitch TTS</h2>
-                      <p>Модераторы: <strong>!tts текст</strong> в чате. Зрители: награда за баллы канала.</p>
-                      {!tts.configured && <p role="alert">На сервере не настроены Twitch OAuth или Python TTS.</p>}
-                      <p>Подключение: {tts.connected
-                        ? `${tts.broadcasterLogin} (${tts.enabled ? (tts.ready ? "онлайн" : "подключается") : "выключено"})`
-                        : "не подключено"}</p>
-                      <p>Ожидают озвучки: {tts.queueLength} / 10.</p>
-                      {tts.error && <p role="alert">{tts.error}</p>}
-                      {new URLSearchParams(window.location.search).get("tts") === "connected" &&
-                        <p>Авторизация TTS обновлена.</p>}
-                      {tts.configured && <a href={`/api/tts/channels/${encodeURIComponent(ownChannel.id)}/connect`}>
-                        {tts.connected ? "Переподключить Twitch TTS" : "Подключить Twitch TTS"}
-                      </a>}
-                      {tts.connected && <>
-                        <button type="button" disabled={ttsBusy} onClick={() => void toggleTts()}>
-                          {tts.enabled ? "Выключить TTS" : "Включить TTS"}
-                        </button>
-                        <label className="field">Стоимость награды
-                          <input type="number" min="1" max="1000000" value={ttsCost}
-                            onChange={(event) => setTtsCost(Number(event.target.value))} />
-                        </label>
-                        <button type="button" disabled={ttsBusy || !Number.isInteger(ttsCost) || ttsCost < 1 || ttsCost > 1_000_000}
-                          onClick={() => void saveTtsReward()}>
-                          {tts.rewardId ? "Сохранить стоимость" : "Создать награду TTS"}
-                        </button>
-                      </>}
-                    </section>}
-                    {canvas && <section className="canvas-settings">
-                      <h2>Настройки холста</h2>
-                      <label className="field">Разрешение
-                        <select value={presetValue(width, height)} onChange={(event) => {
-                          if (event.target.value === "custom") return;
-                          const [nextWidth, nextHeight] = event.target.value.split("x");
-                          setWidth(nextWidth); setHeight(nextHeight);
-                        }}>
-                          {["1280x720", "1920x1080", "2560x1440", "3840x2160", "1080x1920", "720x1280"].map((value) =>
-                            <option value={value} key={value}>{value.replace("x", " × ")}</option>
-                          )}
-                          <option value="custom">Пользовательское разрешение</option>
-                        </select>
-                      </label>
-                      <div className="canvas-size-fields">
-                        <label className="field">Width<input type="number" min="320" max="7680" step="1" value={width} onChange={(event) => setWidth(event.target.value)} /></label>
-                        <label className="field">Height<input type="number" min="320" max="7680" step="1" value={height} onChange={(event) => setHeight(event.target.value)} /></label>
-                      </div>
-                      <p>Соотношение сторон: {ratio ? `${ratio[0]}:${ratio[1]}` : "некорректный размер"}</p>
-                      {ratio && <div className="canvas-proportion" aria-label={`Пропорции холста ${width} на ${height}`}>
-                        <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-                          <rect x="2" y="2" width={Number(width) - 4} height={Number(height) - 4} fill="#273038" stroke="#d45454" strokeWidth="4" />
-                        </svg>
-                      </div>}
-                      <p>Допустимо 320–7680 пикселей на ось, соотношение от 1:4 до 4:1.</p>
-                      {changed && <>
-                        <p>Сохранить расположение оставит координаты и размеры без изменений. Элементы за рамкой останутся в SPAWN.</p>
-                        <p>Масштабировать композицию пересчитает X и Y независимо. При смене пропорций форма элементов изменится; crop пересчитается по осям, угол поворота сохранится.</p>
-                        <div className="canvas-save-actions">
-                          <button type="button" disabled={!dimensionsValid || savingCanvas} onClick={() => void saveCanvas("keep")}>Сохранить расположение</button>
-                          <button type="button" disabled={!dimensionsValid || savingCanvas} onClick={() => void saveCanvas("scale")}>Масштабировать композицию</button>
-                        </div>
-                      </>}
-                      <h3>Размер Browser Source в OBS</h3>
-                      <p>Введите текущие Width и Height источника вручную. Сайт не меняет размер Browser Source в OBS.</p>
-                      <div className="canvas-size-fields">
-                        <label className="field">OBS Width<input type="number" min="1" step="1" value={sourceWidth} onChange={(event) => {
-                          setSourceWidth(event.target.value);
-                          window.localStorage.setItem(`obs-width:${ownChannel.id}`, event.target.value);
-                        }} /></label>
-                        <label className="field">OBS Height<input type="number" min="1" step="1" value={sourceHeight} onChange={(event) => {
-                          setSourceHeight(event.target.value);
-                          window.localStorage.setItem(`obs-height:${ownChannel.id}`, event.target.value);
-                        }} /></label>
-                      </div>
-                      {sourceWidth && sourceHeight ?
-                        (Number(sourceWidth) !== canvas.canvasWidth || Number(sourceHeight) !== canvas.canvasHeight) &&
-                          <p className="canvas-warning" role="alert">Размер Browser Source не совпадает с холстом {canvas.canvasWidth} × {canvas.canvasHeight}. Измените Width и Height в OBS вручную.</p>
-                        : <p className="canvas-warning">Укажите размер Browser Source, чтобы проверить совпадение с холстом.</p>}
-                    </section>}
-                    <section>
-                      <h2>Действующие Twitch-модераторы</h2>
-                      <input
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="Поиск модератора"
-                        aria-label="Поиск модератора"
-                      />
-                      {moderators
-                        .filter((item) =>
-                          item.displayName.toLocaleLowerCase().includes(query.toLocaleLowerCase())
-                        )
-                        .map((item) => (
-                          <div className="twitch-person" key={item.id}>
-                            {item.twitchAvatarUrl && <img src={item.twitchAvatarUrl} alt="" />}
-                            <span>{item.displayName}</span>
-                            <label>
-                              <input
-                                type="checkbox"
-                                checked={!item.banned}
-                                disabled={changingModerator !== null}
-                                onChange={() => void toggle(item)}
-                              />{" "}
-                              Доступ к полотну
-                            </label>
-                          </div>
-                        ))}
-                    </section>
-                  </>
-                )}
-              </>
-            )}
-            {mode === "moderator" && (
-              <section>
-                <h2>Ваши каналы</h2>
-                {channels.length === 0 && !loading && <p>Каналы не найдены.</p>}
-                {channels.map((channel) => (
-                  <div className="twitch-person" key={channel.twitchId}>
-                    {channel.avatarUrl && <img src={channel.avatarUrl} alt="" />}
-                    <span>{channel.displayName}</span>
-                    <span>{statusText[channel.status]}</span>
-                    {channel.status === "connected" && channel.id && (
-                      <a href={`/channel/${encodeURIComponent(channel.id)}`}>Открыть редактор</a>
-                    )}
-                  </div>
-                ))}
-              </section>
-            )}
-            <button className="primary" type="button" onClick={() => void logout()}>
-              Выйти
-            </button>
-          </>
-        ) : (
-          <p>Проверяем вход…</p>
-        )}
-      </div>
-    </main>
-  );
+  return <TwitchDashboardView
+    mode={mode} me={me?.user ?? null} channels={channels} moderators={moderators}
+    obs={obs} canvas={canvas} presence={presence} tts={tts}
+    width={width} height={height} sourceWidth={sourceWidth} sourceHeight={sourceHeight}
+    ttsCost={ttsCost} ratio={ratio} changed={Boolean(changed)} dimensionsValid={dimensionsValid}
+    loading={loading} connecting={connecting} savingCanvas={savingCanvas} ttsBusy={ttsBusy}
+    changingModerator={changingModerator} error={error}
+    onRefresh={() => void load(mode)} onLogout={() => void logout()}
+    onConnectChannel={() => void connectChannel()} onToggleModerator={(item) => void toggle(item)}
+    onToggleTts={() => void toggleTts()} onSaveTtsReward={() => void saveTtsReward()}
+    onSaveCanvas={(changeMode) => void saveCanvas(changeMode)}
+    setWidth={setWidth} setHeight={setHeight} setTtsCost={setTtsCost}
+    setSourceWidth={(value) => { setSourceWidth(value); if (ownChannel?.id) window.localStorage.setItem(`obs-width:${ownChannel.id}`, value); }}
+    setSourceHeight={(value) => { setSourceHeight(value); if (ownChannel?.id) window.localStorage.setItem(`obs-height:${ownChannel.id}`, value); }}
+  />;
 }
 
-const presets = new Set(["1280x720", "1920x1080", "2560x1440", "3840x2160", "1080x1920", "720x1280"]);
-function presetValue(width: string, height: string): string {
-  const value = `${width}x${height}`;
-  return presets.has(value) ? value : "custom";
-}
 function reduceRatio(width: number, height: number): [number, number] {
   const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
   const divisor = gcd(width, height);

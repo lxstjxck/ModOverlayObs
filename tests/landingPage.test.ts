@@ -2,6 +2,7 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TwitchLandingPage } from "../src/client/pages/TwitchPages";
+import { TwitchLoginPage } from "../src/client/pages/TwitchLoginPage";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,12 +13,12 @@ function renderLanding(search = "") {
 }
 
 describe("public landing page", () => {
-  it("keeps both Twitch OAuth role routes and the legacy login route", () => {
+  it("routes public calls to action through the Twitch login screen", () => {
     const html = renderLanding();
-    expect(html).toContain('href="/api/auth/twitch/start/streamer"');
-    expect(html).toContain('href="/api/auth/twitch/start/moderator"');
-    expect(html).toContain('href="/legacy-login"');
+    expect(html).toContain('href="/login"');
     expect(html).toContain("Войти через Twitch");
+    expect(html).toContain("LXST Overlay");
+    expect(html).toContain('href="https://github.com/lxstjxck"');
   });
 
   it("explains the supported workflow and distinguishes preview from OBS", () => {
@@ -36,8 +37,13 @@ describe("public landing page", () => {
     expect(html).toContain('id="how-title"');
   });
 
-  it("shows OAuth errors as an accessible alert", () => {
-    const html = renderLanding("?oauth_error=denied");
+  it("keeps both OAuth role routes, legacy login and accessible errors", () => {
+    vi.stubGlobal("React", React);
+    vi.stubGlobal("window", { location: { search: "?oauth_error=denied" } });
+    const html = renderToStaticMarkup(React.createElement(TwitchLoginPage));
+    expect(html).toContain('href="/api/auth/twitch/start/streamer"');
+    expect(html).toContain('href="/api/auth/twitch/start/moderator"');
+    expect(html).toContain('href="/legacy-login"');
     expect(html).toContain('role="alert"');
     expect(html).toContain("Вход через Twitch отменён.");
   });
