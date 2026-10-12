@@ -10,6 +10,7 @@ import type {
   TwitchModeratorView,
   TwitchProfileView
 } from "../../shared/types";
+import type { TtsSetupView } from "../../shared/types";
 import { api } from "../api";
 import { BrandMark } from "../components/BrandMark";
 
@@ -71,6 +72,9 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   const [loading, setLoading] = useState(false);
   const [changingModerator, setChangingModerator] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [tts, setTts] = useState<TtsSetupView | null>(null);
+  const [ttsCost, setTtsCost] = useState(1000);
+  const [ttsBusy, setTtsBusy] = useState(false);
 
   async function load(currentMode: TwitchMode) {
     setLoading(true);
@@ -81,6 +85,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     canvasRevisionRef.current = "";
     setPresence(null);
     setModerators([]);
+    setTts(null);
     try {
       const result = await api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels");
       setChannels(result.channels);
@@ -97,6 +102,9 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
           `/api/auth/twitch/channels/${encodeURIComponent(id)}/moderators`
         );
         setModerators(list.moderators);
+        const ttsView = await api<TtsSetupView>(`/api/tts/channels/${encodeURIComponent(id)}`);
+        setTts(ttsView);
+        setTtsCost(ttsView.rewardCost);
       } else {
         setObs(null);
         setModerators([]);
@@ -132,6 +140,17 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     if (!ownChannel?.id) return;
     setSourceWidth(window.localStorage.getItem(`obs-width:${ownChannel.id}`) ?? "");
     setSourceHeight(window.localStorage.getItem(`obs-height:${ownChannel.id}`) ?? "");
+  }, [ownChannel?.id]);
+  useEffect(() => {
+    if (!ownChannel?.id) return;
+    const channelId = ownChannel.id;
+    let mounted = true;
+    const timer = window.setInterval(() => {
+      void api<TtsSetupView>(`/api/tts/channels/${encodeURIComponent(channelId)}`)
+        .then((view) => { if (mounted) setTts(view); })
+        .catch(() => { if (mounted) setTts((current) => current && { ...current, ready: false }); });
+    }, 5000);
+    return () => { mounted = false; window.clearInterval(timer); };
   }, [ownChannel?.id]);
   useEffect(() => {
     if (!ownChannel?.id) return;
@@ -201,6 +220,34 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
     window.location.replace("/login");
+  }
+
+  async function toggleTts() {
+    if (!ownChannel?.id || !tts || ttsBusy) return;
+    setTtsBusy(true);
+    setError("");
+    try {
+      const view = await api<TtsSetupView>(`/api/tts/channels/${encodeURIComponent(ownChannel.id)}/enabled`, {
+        method: "PUT", body: JSON.stringify({ enabled: !tts.enabled })
+      });
+      setTts(view);
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : "Не удалось изменить TTS");
+    } finally { setTtsBusy(false); }
+  }
+
+  async function saveTtsReward() {
+    if (!ownChannel?.id || !tts || ttsBusy || !Number.isInteger(ttsCost) || ttsCost < 1 || ttsCost > 1_000_000) return;
+    setTtsBusy(true);
+    setError("");
+    try {
+      await api(`/api/tts/channels/${encodeURIComponent(ownChannel.id)}/reward`, {
+        method: tts.rewardId ? "PATCH" : "POST", body: JSON.stringify({ cost: ttsCost })
+      });
+      setTts(await api<TtsSetupView>(`/api/tts/channels/${encodeURIComponent(ownChannel.id)}`));
+    } catch (changeError) {
+      setError(changeError instanceof Error ? changeError.message : "Не удалось сохранить награду TTS");
+    } finally { setTtsBusy(false); }
   }
 
   async function connectChannel() {
@@ -287,7 +334,34 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
                         </p>
                       </section>
                     )}
-                    <p>TTS для новых Twitch-каналов пока недоступен. Для существующего legacy-канала настройте TTS через старую панель OBS Setup.</p>
+                    {tts && <section className="tts-setup">
+                      <h2>Twitch TTS</h2>
+                      <p>Модераторы: <strong>!tts текст</strong> в чате. Зрители: награда за баллы канала.</p>
+                      {!tts.configured && <p role="alert">На сервере не настроены Twitch OAuth или Python TTS.</p>}
+                      <p>Подключение: {tts.connected
+                        ? `${tts.broadcasterLogin} (${tts.enabled ? (tts.ready ? "онлайн" : "подключается") : "выключено"})`
+                        : "не подключено"}</p>
+                      <p>Ожидают озвучки: {tts.queueLength} / 10.</p>
+                      {tts.error && <p role="alert">{tts.error}</p>}
+                      {new URLSearchParams(window.location.search).get("tts") === "connected" &&
+                        <p>Авторизация TTS обновлена.</p>}
+                      {tts.configured && <a href={`/api/tts/channels/${encodeURIComponent(ownChannel.id)}/connect`}>
+                        {tts.connected ? "Переподключить Twitch TTS" : "Подключить Twitch TTS"}
+                      </a>}
+                      {tts.connected && <>
+                        <button type="button" disabled={ttsBusy} onClick={() => void toggleTts()}>
+                          {tts.enabled ? "Выключить TTS" : "Включить TTS"}
+                        </button>
+                        <label className="field">Стоимость награды
+                          <input type="number" min="1" max="1000000" value={ttsCost}
+                            onChange={(event) => setTtsCost(Number(event.target.value))} />
+                        </label>
+                        <button type="button" disabled={ttsBusy || !Number.isInteger(ttsCost) || ttsCost < 1 || ttsCost > 1_000_000}
+                          onClick={() => void saveTtsReward()}>
+                          {tts.rewardId ? "Сохранить стоимость" : "Создать награду TTS"}
+                        </button>
+                      </>}
+                    </section>}
                     {canvas && <section className="canvas-settings">
                       <h2>Настройки холста</h2>
                       <label className="field">Разрешение

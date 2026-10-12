@@ -69,6 +69,7 @@ import { accessRevocation } from "../src/server/accessRevocation";
 import { getChannelEmotes } from "../src/server/emotes";
 import { ensureRuntimeState } from "../src/server/bootstrap";
 import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModeratorBan, syncModerators } from "../src/server/channelAccess";
+import { startTts, stopTts } from "../src/server/tts";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -915,6 +916,185 @@ it("binds Twitch OAuth to the owner session and stores tokens encrypted", async 
     config.twitchClientSecret = "";
     config.ttsPython = "";
     config.publicOrigin = "";
+  }
+});
+
+it("runs two Twitch TTS channels independently across OAuth, queues, revocation and restart", async () => {
+  config.twitchClientId = "tts-test-client";
+  config.twitchClientSecret = "tts-test-secret";
+  config.ttsPython = process.execPath;
+  config.publicOrigin = baseUrl;
+  await fs.mkdir(path.join(fixture.root, "scripts"), { recursive: true });
+  await fs.writeFile(path.join(fixture.root, "scripts", "tts_worker.py"),
+    "const fs=require('fs');let data='';process.stdin.on('data',x=>data+=x);process.stdin.on('end',()=>fs.writeFileSync(process.argv[2],JSON.parse(data).text));");
+  const owners = [];
+  for (const [twitchId, token] of [["101", "tts-a"], ["202", "tts-b"]] as const) {
+    const owner = await prisma.user.create({ data: { username: `twitch:${twitchId}`, displayName: token,
+      passwordHash: "!twitch-oauth-only", twitchUserId: twitchId, twitchLogin: token } });
+    const channel = await prisma.streamer.create({ data: { displayName: token, overlayToken: `overlay-${token}`,
+      ownerUserId: owner.id, twitchBroadcasterId: twitchId, twitchLogin: token } });
+    await prisma.session.create({ data: { userId: owner.id, tokenHash: hashSessionToken(token), authMethod: "TWITCH",
+      twitchMode: "streamer", expiresAt: new Date(Date.now() + 3600_000) } });
+    owners.push({ channel, token, twitchId });
+  }
+  const moderator = await prisma.user.create({ data: { username: "twitch:303", displayName: "Twitch mod",
+    passwordHash: "!twitch-oauth-only", twitchUserId: "303" } });
+  await prisma.session.create({ data: { userId: moderator.id, tokenHash: hashSessionToken("tts-mod"),
+    authMethod: "TWITCH", twitchMode: "moderator", expiresAt: new Date(Date.now() + 3600_000) } });
+  const overlayA = await socketClient({ overlayToken: owners[0].channel.overlayToken }, "overlay:state");
+  const overlayB = await socketClient({ overlayToken: owners[1].channel.overlayToken }, "overlay:state");
+  class FakeWebSocket {
+    static OPEN = 1;
+    readyState = 1;
+    handlers = new Map<string, Array<(event: { data: string }) => void>>();
+    constructor(_url: string) { instances.push(this); }
+    addEventListener(name: string, handler: (event: { data: string }) => void) {
+      this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]);
+    }
+    emit(name: string, event = { data: "" }) {
+      for (const handler of this.handlers.get(name) ?? []) handler(event);
+    }
+    message(type: string, id: string, event?: Record<string, unknown>, subscription_type?: string) {
+      this.emit("message", { data: JSON.stringify({ metadata: { message_type: type, message_id: id,
+        subscription_type }, payload: type === "session_welcome" ? { session: { id } } : { event } }) });
+    }
+    close() { if (this.readyState === 3) return; this.readyState = 3; this.emit("close"); }
+  }
+  const instances: FakeWebSocket[] = [];
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+  const realFetch = globalThis.fetch;
+  let failRefresh = false;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (!url.startsWith("https://")) return realFetch(input, init);
+    if (url === "https://id.twitch.tv/oauth2/token") {
+      const params = new URLSearchParams(init?.body as URLSearchParams);
+      if (params.get("grant_type") === "refresh_token" && failRefresh)
+        return Promise.resolve(new Response("revoked", { status: 400 }));
+      const code = params.get("code") ?? "a";
+      return Promise.resolve(new Response(JSON.stringify({ access_token: `access-${code}`,
+        refresh_token: `refresh-${code}`, expires_in: code === "expired" ? 1 : 3600 }), { headers: { "Content-Type": "application/json" } }));
+    }
+    if (url === "https://id.twitch.tv/oauth2/validate") {
+      const token = String(new Headers(init?.headers).get("Authorization"));
+      const id = token === "OAuth access-b" ? "202" : "101";
+      return Promise.resolve(new Response(JSON.stringify({ client_id: config.twitchClientId, user_id: id,
+        login: id === "101" ? "tts-a" : "tts-b", scopes: ["user:read:chat", "channel:manage:redemptions"] })));
+    }
+    if (url.includes("/eventsub/subscriptions")) return Promise.resolve(new Response(JSON.stringify({ data: [] })));
+    if (url.includes("/channel_points/custom_rewards")) return Promise.resolve(new Response(JSON.stringify({ data: [{ id: "reward" }] })));
+    throw new Error(`Unexpected Twitch request: ${url}`);
+  });
+  try {
+    expect((await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-mod") })).status).toBe(403);
+    expect((await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-a") })).status).toBe(404);
+    expect((await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}/connect`, { headers: headers("tts-mod") })).status).toBe(403);
+    expect((await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}/connect`, { headers: headers("tts-a") })).status).toBe(404);
+    startTts(realtime);
+    for (const [index, owner] of owners.entries()) {
+      const start = await fetch(`${baseUrl}/api/tts/channels/${owner.channel.id}/connect`, { headers: headers(owner.token), redirect: "manual" });
+      expect(start.status).toBe(302);
+      const grant = new URL(start.headers.get("location")!);
+      expect(grant.searchParams.get("scope")).toBe("user:read:chat channel:manage:redemptions");
+      const cookie = start.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_tts_state="))!.split(";")[0];
+      if (index === 0) {
+        const wrongSession = await fetch(`${baseUrl}/api/tts/callback?state=${grant.searchParams.get("state")}&code=a`,
+          { headers: { ...headers("tts-b"), Cookie: `${headers("tts-b").Cookie}; ${cookie}` }, redirect: "manual" });
+        expect(wrongSession.status).toBe(400);
+      }
+      const callback = await fetch(`${baseUrl}/api/tts/callback?state=${grant.searchParams.get("state")}&code=${index === 0 ? "a" : "b"}`,
+        { headers: { ...headers(owner.token), Cookie: `${headers(owner.token).Cookie}; ${cookie}` }, redirect: "manual" });
+      expect(callback.status).toBe(303);
+      expect(callback.headers.get("location")).toBe("/streamer?tts=connected");
+      expect((await fetch(`${baseUrl}/api/tts/callback?state=${grant.searchParams.get("state")}&code=${index === 0 ? "a" : "b"}`,
+        { headers: { ...headers(owner.token), Cookie: `${headers(owner.token).Cookie}; ${cookie}` }, redirect: "manual" })).status).toBe(400);
+      const stored = await prisma.settings.findUniqueOrThrow({ where: { key: `tts:twitch:${owner.channel.id}` } });
+      expect(stored.value).not.toContain(`access-${index === 0 ? "a" : "b"}`);
+      expect(JSON.stringify(await (await fetch(`${baseUrl}/api/tts/channels/${owner.channel.id}`, { headers: headers(owner.token) })).json())).not.toContain("refresh-");
+    }
+    await expect.poll(() => instances.length).toBe(2);
+    instances[0].message("session_welcome", "session-a");
+    instances[1].message("session_welcome", "session-b");
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { ready: boolean }).ready).toBe(true);
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { ready: boolean }).ready).toBe(true);
+    expect((await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}/reward`, { method: "POST",
+      headers: { ...headers("tts-a"), "Content-Type": "application/json" }, body: JSON.stringify({ cost: 999 }) })).status).toBe(404);
+    for (const [index, owner] of owners.entries()) {
+      expect((await fetch(`${baseUrl}/api/tts/channels/${owner.channel.id}/reward`, { method: "POST",
+        headers: { ...headers(owner.token), "Content-Type": "application/json" },
+        body: JSON.stringify({ cost: index === 0 ? 100 : 200 }) })).status).toBe(200);
+    }
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { rewardCost: number }).rewardCost).toBe(100);
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { rewardCost: number }).rewardCost).toBe(200);
+    const playA: Array<{ id: string; url: string }> = [];
+    const playB: Array<{ id: string; url: string }> = [];
+    overlayA.on("tts:play", (value) => playA.push(value));
+    overlayB.on("tts:play", (value) => playB.push(value));
+    const chat = (channel: 0 | 1, id: string, user: string, text: string) => instances[channel].message("notification", id,
+      { broadcaster_user_id: owners[channel].twitchId, chatter_user_id: user,
+        badges: [{ set_id: "moderator" }], message: { text: `!tts ${text}` } }, "channel.chat.message");
+    chat(0, "a-1", "mod-a", "alpha");
+    chat(1, "b-1", "mod-b", "beta");
+    await expect.poll(() => playA.length).toBe(1);
+    await expect.poll(() => playB.length).toBe(1);
+    expect(await (await fetch(`${baseUrl}${playA[0].url}`)).text()).toBe("alpha");
+    expect(await (await fetch(`${baseUrl}${playB[0].url}`)).text()).toBe("beta");
+    instances[0].message("notification", "wrong-channel", { broadcaster_user_id: owners[1].twitchId,
+      chatter_user_id: "mod-x", badges: [{ set_id: "moderator" }], message: { text: "!tts must-not-play" } },
+    "channel.chat.message");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { queueLength: number }).queueLength).toBe(0);
+    for (let index = 0; index < 12; index++) chat(0, `queued-${index}`, `mod-${index}`, `queued-${index}`);
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { queueLength: number }).queueLength).toBe(10);
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { queueLength: number }).queueLength).toBe(0);
+    const disable = await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}/enabled`, { method: "PUT",
+      headers: { ...headers("tts-a"), "Content-Type": "application/json" }, body: JSON.stringify({ enabled: false }) });
+    expect(disable.status).toBe(200);
+    expect(instances[0].readyState).toBe(3);
+    expect((await disable.json() as { queueLength: number }).queueLength).toBe(0);
+    expect(instances[1].readyState).toBe(1);
+    const expiredStart = await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}/connect`,
+      { headers: headers("tts-a"), redirect: "manual" });
+    const expiredState = new URL(expiredStart.headers.get("location")!).searchParams.get("state");
+    const expiredCookie = expiredStart.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_tts_state="))!.split(";")[0];
+    const expiredCallback = await fetch(`${baseUrl}/api/tts/callback?state=${expiredState}&code=expired`,
+      { headers: { ...headers("tts-a"), Cookie: `${headers("tts-a").Cookie}; ${expiredCookie}` }, redirect: "manual" });
+    expect(expiredCallback.status).toBe(303);
+    await expect.poll(() => instances.length).toBe(3);
+    failRefresh = true;
+    instances[2].message("session_welcome", "session-a-expired");
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { connected: boolean }).connected).toBe(false);
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { ready: boolean }).ready).toBe(true);
+    failRefresh = false;
+    overlayB.emit("tts:done", { id: playB[0].id });
+    chat(1, "b-2", "mod-new", "still-running");
+    await expect.poll(() => playB.length).toBe(2);
+    instances[1].message("revocation", "revoked-b");
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { connected: boolean }).connected).toBe(false);
+    const revoked = await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { error: string };
+    expect(revoked.error).toContain("revoked");
+    const restoredStart = await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}/connect`,
+      { headers: headers("tts-a"), redirect: "manual" });
+    const restoredState = new URL(restoredStart.headers.get("location")!).searchParams.get("state");
+    const restoredCookie = restoredStart.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_tts_state="))!.split(";")[0];
+    expect((await fetch(`${baseUrl}/api/tts/callback?state=${restoredState}&code=a`,
+      { headers: { ...headers("tts-a"), Cookie: `${headers("tts-a").Cookie}; ${restoredCookie}` }, redirect: "manual" })).status).toBe(303);
+    await expect.poll(() => instances.length).toBe(4);
+    instances[3].message("session_welcome", "session-a-again");
+    stopTts();
+    startTts(realtime);
+    await expect.poll(() => instances.length).toBe(5);
+    instances[4].message("session_welcome", "session-a-restored");
+    await expect.poll(async () => (await (await fetch(`${baseUrl}/api/tts/channels/${owners[0].channel.id}`, { headers: headers("tts-a") })).json() as { ready: boolean }).ready).toBe(true);
+    expect(instances[1].readyState).toBe(3);
+    expect((await (await fetch(`${baseUrl}/api/tts/channels/${owners[1].channel.id}`, { headers: headers("tts-b") })).json() as { ready: boolean }).ready).toBe(false);
+  } finally {
+    stopTts();
+    vi.unstubAllGlobals();
+    config.ttsPython = "";
+    config.publicOrigin = "";
+    config.twitchClientId = "";
+    config.twitchClientSecret = "";
   }
 });
 

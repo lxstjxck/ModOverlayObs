@@ -161,6 +161,9 @@ export interface ObsSetupView {
 export interface TtsSetupView {
   configured: boolean;
   connected: boolean;
+  enabled: boolean;
+  error: string | null;
+  queueLength: number;
   broadcasterLogin: string | null;
   rewardId: string | null;
   rewardCost: number;
