@@ -1,0 +1,29 @@
+/* Shared palette for the public interface and upcoming screen redesigns. */
+:root {
+  --ui-font: Montserrat, "Segoe UI", Arial, sans-serif;
+  --ui-bg: #0b0b0e;
+  --ui-surface: #101014;
+  --ui-surface-raised: #17171e;
+  --ui-ink: #e8e8ee;
+  --ui-muted: #a3a1af;
+  --ui-accent: #b8a7f0;
+  --ui-accent-strong: #d2c5ff;
+  --ui-border: #292831;
+  --ui-border-accent: #615580;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+  --ui-space-12: 48px;
+  --ui-radius-sm: 10px;
+  --ui-radius-md: 16px;
+  --ui-radius-lg: 24px;
+  --ui-radius-pill: 999px;
+  --ui-shadow-panel: 0 30px 90px rgba(0, 0, 0, 0.4);
+  --ui-shadow-glow: 0 0 80px rgba(184, 167, 240, 0.16);
+  --ui-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ui-duration-fast: 180ms;
+  --ui-duration-slow: 600ms;
+}

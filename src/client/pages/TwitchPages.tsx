@@ -1,3 +1,4 @@
+import { ArrowDown, AudioLines, Image, LockKeyhole, MonitorPlay, Smile, Sparkles } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import type {
@@ -13,6 +14,8 @@ import type {
 import type { TtsSetupView } from "../../shared/types";
 import { api } from "../api";
 import { BrandMark } from "../components/BrandMark";
+import { LandingEditorDemo } from "../components/LandingEditorDemo";
+import { ActionLink, FeatureCard, SectionHeading } from "../components/ui/LandingUi";
 
 type TwitchMe = { user: TwitchProfileView; mode: TwitchMode; csrfToken: string };
 const statusText = {
@@ -32,24 +35,148 @@ const oauthErrors: Record<string, string> = {
 export function TwitchLandingPage() {
   const error = new URLSearchParams(window.location.search).get("oauth_error");
   return (
-    <main className="login-page">
-      <div className="login-form">
-        <div className="brand-mark">
-          <BrandMark />
+    <main className="landing-page">
+      <header className="landing-header landing-shell">
+        <a className="landing-brand" href="/" aria-label="ModOverlayObs — главная">
+          <span className="landing-brand-icon">
+            <BrandMark />
+          </span>
+          <span>
+            ModOverlay<span>Obs</span>
+          </span>
+        </a>
+        <nav aria-label="Навигация по странице">
+          <a href="#how-it-works">Как работает</a>
+          <a href="#features">Возможности</a>
+        </nav>
+        <a className="landing-header-login" href="/api/auth/twitch/start/streamer">
+          Войти <span>через Twitch</span>
+          <span aria-hidden="true"> ↗</span>
+        </a>
+      </header>
+
+      <section className="landing-hero landing-shell" aria-labelledby="landing-title">
+        <div className="landing-hero-copy">
+          <p className="landing-eyebrow">
+            <span className="landing-eyebrow-line" /> ИНСТРУМЕНТ ДЛЯ ЖИВОГО ЭФИРА
+          </p>
+          <h1 id="landing-title">
+            Твой эфир.
+            <br />
+            <em>Твои правила.</em>
+          </h1>
+          <p className="landing-hero-lead">
+            Управляйте оверлеем в OBS вместе с модераторами. Изображения, видео, смайлы и текст
+            появляются на трансляции тогда, когда это нужно.
+          </p>
+          {error && (
+            <div className="landing-error" role="alert">
+              {oauthErrors[error] ?? "Ошибка авторизации."}
+            </div>
+          )}
+          <div className="landing-hero-actions">
+            <ActionLink href="/api/auth/twitch/start/streamer">Войти через Twitch</ActionLink>
+            <a className="landing-text-link" href="/api/auth/twitch/start/moderator">
+              Я модератор <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+          <a className="landing-scroll-link" href="#how-it-works">
+            <ArrowDown size={15} aria-hidden="true" /> Узнать больше
+          </a>
         </div>
-        <h1>ModOverlayObs</h1>
-        <p>Выберите способ входа через Twitch.</p>
-        {error && <div className="error-box">{oauthErrors[error] ?? "Ошибка авторизации."}</div>}
-        <a className="primary" href="/api/auth/twitch/start/streamer">
-          Стример
-        </a>
-        <a className="primary" href="/api/auth/twitch/start/moderator">
-          Модератор
-        </a>
-        <p>
-          <a href="/legacy-login">Вход по паролю для существующей панели</a>
-        </p>
-      </div>
+        <div className="landing-hero-visual">
+          <LandingEditorDemo />
+        </div>
+        <div className="landing-hero-halo" aria-hidden="true" />
+      </section>
+
+      <section className="landing-intro" id="how-it-works" aria-labelledby="how-title">
+        <div className="landing-shell">
+          <SectionHeading
+            id="how-title"
+            eyebrow="01 / ПРОСТОЕ ПОДКЛЮЧЕНИЕ"
+            title="От входа до эфира — несколько шагов."
+          >
+            Стример подключает канал, а команда получает удобное пространство для работы с оверлеем.
+          </SectionHeading>
+          <div className="landing-steps">
+            <article>
+              <span>01</span>
+              <h3>Подключите Twitch</h3>
+              <p>Войдите как стример и подключите свой канал.</p>
+            </article>
+            <article>
+              <span>02</span>
+              <h3>Добавьте источник в OBS</h3>
+              <p>Скопируйте адрес оверлея в Browser Source.</p>
+            </article>
+            <article>
+              <span>03</span>
+              <h3>Дайте доступ команде</h3>
+              <p>Управляйте доступом модераторов в панели стримера.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section
+        className="landing-features landing-shell"
+        id="features"
+        aria-labelledby="features-title"
+      >
+        <SectionHeading
+          id="features-title"
+          eyebrow="02 / ВОЗМОЖНОСТИ"
+          title="Эфир становится живее."
+        >
+          Всё необходимое для совместной работы с контентом на трансляции.
+        </SectionHeading>
+        <div className="landing-feature-grid">
+          <FeatureCard icon={<Image size={23} />} number="01" title="Медиа на холсте">
+            Модераторы размещают изображения, GIF, видео и текст прямо на полотне оверлея.
+          </FeatureCard>
+          <FeatureCard icon={<Smile size={23} />} number="02" title="Смайлы канала">
+            Смайлы Twitch и 7TV можно добавить в область подготовки и расположить на холсте.
+          </FeatureCard>
+          <FeatureCard icon={<LockKeyhole size={23} />} number="03" title="Контроль доступа">
+            Стример подключает канал и управляет тем, кому из модераторов доступен оверлей.
+          </FeatureCard>
+          <FeatureCard icon={<AudioLines size={23} />} number="04" title="Twitch TTS">
+            Подключайте озвучивание сообщений из чата через команду или награду за баллы канала.
+          </FeatureCard>
+        </div>
+        <div className="landing-note">
+          <MonitorPlay size={18} aria-hidden="true" />
+          <span>
+            Предпросмотр помогает подготовить сцену. OBS показывает живое состояние оверлея.
+          </span>
+        </div>
+      </section>
+
+      <section className="landing-cta">
+        <div className="landing-shell landing-cta-inner">
+          <div>
+            <p className="landing-eyebrow">
+              <Sparkles size={16} aria-hidden="true" /> ГОТОВЫ НАЧАТЬ?
+            </p>
+            <h2>
+              Дайте эфиру
+              <br />
+              <em>больше жизни.</em>
+            </h2>
+            <p>Подключите Twitch и настройте свой оверлей для OBS.</p>
+          </div>
+          <div className="landing-cta-actions">
+            <ActionLink href="/api/auth/twitch/start/streamer">Войти через Twitch</ActionLink>
+            <a href="/api/auth/twitch/start/moderator">Вход для модератора ↗</a>
+          </div>
+        </div>
+      </section>
+      <footer className="landing-footer landing-shell">
+        <span>ModOverlayObs</span>
+        <span>Оверлей для OBS и вашей команды.</span>
+        <a href="/legacy-login">Вход по паролю</a>
+      </footer>
     </main>
   );
 }
