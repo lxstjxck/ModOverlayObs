@@ -180,10 +180,12 @@ export function TwitchDashboardView(props: DashboardProps) {
       <div className="lxst-shell lxst-dashboard-content">
         <div className="lxst-dashboard-title-row">
           <div>
-            <p className="landing-eyebrow">
-              <span className="landing-eyebrow-line" />{" "}
-              {mode === "streamer" ? "КАБИНЕТ СТРИМЕРА" : "КАБИНЕТ МОДЕРАТОРА"}
-            </p>
+              {mode === "moderator" && (
+                <p className="landing-eyebrow">
+                  <span className="landing-eyebrow-line" />{" "}
+                  КАБИНЕТ МОДЕРАТОРА
+                </p>
+              )}
             <h1>{mode === "streamer" ? "Панель управления" : "Ваши каналы."}</h1>
             <p className="lxst-dashboard-lead">
               {mode === "streamer"
