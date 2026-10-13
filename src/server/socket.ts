@@ -18,6 +18,7 @@ import {
 import { accessRevocation } from "./accessRevocation";
 import { canAccessChannel } from "./channelAccess";
 import { withCanvasLock } from "./canvasSettings";
+import { config } from "./config";
 import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
@@ -252,12 +253,14 @@ async function handleOverlayConnection(
   overlaysByStreamer.set(streamerId, overlays);
 
   socket.on("disconnect", () => {
-    overlayTtsDisconnected(socket.id);
+    if (config.ttsEnabled) overlayTtsDisconnected(socket.id);
     overlaysByStreamer.get(streamerId)?.delete(socket.id);
     emitPresence(io, streamerId);
   });
-  socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
-  socket.on("tts:error", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, false));
+  if (config.ttsEnabled) {
+    socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
+    socket.on("tts:error", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, false));
+  }
   socket.on("overlay:reload:ready", (payload: { attemptId?: unknown } = {}) => {
     overlayReload.ready(streamerId, socket.id, payload?.attemptId);
   });

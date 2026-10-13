@@ -15,6 +15,10 @@ function numberEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function ttsEnabledFromEnv(value: string | undefined): boolean {
+  return value === "true";
+}
+
 function listEnv(name: string): string[] {
   return (process.env[name] ?? "")
     .split(",")
@@ -81,6 +85,7 @@ export const config = {
   twitchClientSecret: process.env.TWITCH_CLIENT_SECRET ?? "",
   twitchOAuthRedirectUri: process.env.TWITCH_OAUTH_REDIRECT_URI ?? "",
   oauthTokenEncryptionKey: process.env.OAUTH_TOKEN_ENCRYPTION_KEY ?? "",
+  ttsEnabled: ttsEnabledFromEnv(process.env.TTS_ENABLED),
   ttsPython: process.env.TTS_PYTHON ?? ""
 };
 

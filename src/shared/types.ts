@@ -167,6 +167,7 @@ export interface ObsSetupView {
 }
 
 export interface TtsSetupView {
+  available: boolean;
   configured: boolean;
   connected: boolean;
   enabled: boolean;

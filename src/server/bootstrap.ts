@@ -23,7 +23,7 @@ export async function ensureRuntimeState(): Promise<void> {
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(path.resolve(config.projectRoot, "database"), { recursive: true });
   await fs.mkdir(path.join(config.uploadDir, ".tmp"), { recursive: true });
-  await cleanupStaleTtsFiles();
+  if (config.ttsEnabled) await cleanupStaleTtsFiles();
 
   await prisma.session.deleteMany({
     where: { expiresAt: { lt: new Date() } }

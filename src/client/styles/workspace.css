@@ -715,6 +715,18 @@
 .lxst-tts-status strong {
   color: var(--ui-ink);
 }
+.lxst-tts-coming-soon {
+  display: grid;
+  justify-items: start;
+  gap: 15px;
+  margin-top: 20px;
+  padding: 22px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+}
+.lxst-tts-coming-soon p {
+  margin: 0;
+}
 .lxst-tts-controls {
   display: grid;
   gap: 14px;

@@ -32,7 +32,8 @@ async function main(): Promise<void> {
   }
 
   const httpServer = http.createServer(app);
-  startTts(configureSocket(httpServer));
+  const socketServer = configureSocket(httpServer);
+  if (config.ttsEnabled) startTts(socketServer);
   httpServer.once("close", stopTts);
 
   httpServer.listen(config.port, () => {

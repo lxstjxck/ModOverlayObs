@@ -590,7 +590,14 @@ export function TwitchDashboardView(props: DashboardProps) {
                   title="Twitch TTS"
                   className="lxst-tts"
                 >
-                  {tts ? (
+                  {tts && !tts.available ? (
+                    <div className="lxst-tts-coming-soon" role="status">
+                      <StatusPill tone="neutral">Скоро появится</StatusPill>
+                      <p className="lxst-muted">
+                        Озвучивание сообщений зрителей за баллы канала Twitch. Функция находится в разработке и станет доступна позже.
+                      </p>
+                    </div>
+                  ) : tts ? (
                     <>
                       <p className="lxst-muted">
                         Модераторы используют <strong>!tts текст</strong> в чате. Для зрителей

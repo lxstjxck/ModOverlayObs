@@ -272,7 +272,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     setSourceHeight(window.localStorage.getItem(`obs-height:${ownChannel.id}`) ?? "");
   }, [ownChannel?.id]);
   useEffect(() => {
-    if (!ownChannel?.id) return;
+    if (!ownChannel?.id || !tts?.available) return;
     const channelId = ownChannel.id;
     let mounted = true;
     const timer = window.setInterval(() => {
@@ -281,7 +281,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
         .catch(() => { if (mounted) setTts((current) => current && { ...current, ready: false }); });
     }, 5000);
     return () => { mounted = false; window.clearInterval(timer); };
-  }, [ownChannel?.id]);
+  }, [ownChannel?.id, tts?.available]);
   useEffect(() => {
     if (!ownChannel?.id) return;
     const socket = io({ path: "/socket.io", query: { channelId: ownChannel.id } });

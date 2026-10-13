@@ -241,13 +241,14 @@ async function twitchOwnerChannel(request: Request, response: Response) {
 function ttsView(channelId: string, settings: StoredTwitch | null, modern = false): TtsSetupView {
   const state = channels.get(channelId);
   return {
-    configured: Boolean(config.twitchClientId && config.twitchClientSecret && config.ttsPython &&
+    available: config.ttsEnabled,
+    configured: Boolean(config.ttsEnabled && config.twitchClientId && config.twitchClientSecret && config.ttsPython &&
       (!modern || /^[0-9a-f]{64}$/i.test(config.oauthTokenEncryptionKey))),
     connected: Boolean(settings && !settings.revoked),
     broadcasterLogin: settings?.broadcasterLogin ?? null,
     rewardId: settings?.rewardId ?? null,
     rewardCost: settings?.rewardCost ?? 1000,
-    enabled: settings?.enabled !== false,
+    enabled: config.ttsEnabled && settings?.enabled !== false,
     error: settings?.error ?? null,
     queueLength: state?.queue.length ?? 0,
     ready: Boolean(settings && settings.enabled !== false && !settings.revoked && state?.subscribed && state.socket?.readyState === WebSocket.OPEN)
@@ -284,6 +285,14 @@ async function rewardChange(request: Request, response: Response, update: boolea
 
 export function ttsRouter(): express.Router {
   const router = express.Router();
+  router.use((request, response, next) => {
+    if (config.ttsEnabled || (request.method === "GET" &&
+        (request.path === "/" || /^\/channels\/[^/]+$/.test(request.path)))) {
+      next();
+      return;
+    }
+    response.status(503).json({ error: "Twitch TTS временно недоступен. Функция скоро появится." });
+  });
   router.get("/audio/:id", (request, response) => {
     const match = [...channels.values()].map((state) => state.active).find((job) => job?.id === request.params.id);
     sendTtsAudio(request, response, match ?? null);
@@ -291,6 +300,11 @@ export function ttsRouter(): express.Router {
   router.get("/channels/:channelId", async (request, response) => {
     const channel = await twitchOwnerChannel(request, response);
     if (!channel) return;
+    if (!config.ttsEnabled) {
+      response.setHeader("Cache-Control", "no-store");
+      response.json(ttsView(channel.id, null, true));
+      return;
+    }
     const settings = await loadTwitch(channel.id).catch(() => null);
     response.setHeader("Cache-Control", "no-store");
     response.json(ttsView(channel.id, settings, true));
@@ -408,6 +422,11 @@ export function ttsRouter(): express.Router {
     next();
   });
   router.get("/", requireAuth, ownerOnly, async (_request, response) => {
+    if (!config.ttsEnabled) {
+      response.setHeader("Cache-Control", "no-store");
+      response.json(ttsView("", null));
+      return;
+    }
     const settings = await loadTwitch().catch(() => null);
     const view = ttsView((await getDefaultStreamer()).id, settings);
     response.json(view);
@@ -610,6 +629,7 @@ export function sendTtsAudio(
 }
 
 export function startTts(server: Server): void {
+  if (!config.ttsEnabled) return;
   io = server;
   stopping = false;
   debugTts("diagnostics enabled");
@@ -681,7 +701,7 @@ async function revokeTwitch(channelId: string, error: string, expectedToken?: st
 }
 
 function restartTwitch(channelId?: string): void {
-  if (stopping || !io) return;
+  if (!config.ttsEnabled || stopping || !io) return;
   if (!channelId) {
     void getDefaultStreamer().then((channel) => restartTwitch(channel.id));
     return;
@@ -703,6 +723,7 @@ function restartTwitch(channelId?: string): void {
 }
 
 function connectSocket(channelId: string, url: string, transferred: boolean): void {
+  if (!config.ttsEnabled) return;
   const state = runtime(channelId);
   const ws = new WebSocket(url);
   if (transferred) state.pendingSocket = ws;
@@ -732,6 +753,7 @@ function connectSocket(channelId: string, url: string, transferred: boolean): vo
 }
 
 async function handleTwitchMessage(channelId: string, ws: WebSocket, raw: string, transferred: boolean): Promise<void> {
+  if (!config.ttsEnabled) return;
   const state = runtime(channelId);
   if (state.socket !== ws && state.pendingSocket !== ws) return;
   try {
@@ -801,6 +823,7 @@ async function handleTwitchMessage(channelId: string, ws: WebSocket, raw: string
 }
 
 function enqueue(job: TtsJob): boolean {
+  if (!config.ttsEnabled) return false;
   const state = runtime(job.streamerId);
   const now = Date.now();
   for (const [id, time] of state.lastUsed) if (now - time > 10 * 60_000) state.lastUsed.delete(id);
@@ -815,7 +838,7 @@ function enqueue(job: TtsJob): boolean {
 }
 
 async function processQueue(): Promise<void> {
-  if (generating || !io || stopping) return;
+  if (!config.ttsEnabled || generating || !io || stopping) return;
   const ids = [...channels.keys()];
   const previous = ids.indexOf(lastGeneratedChannel ?? "");
   const ordered = [...ids.slice(previous + 1), ...ids.slice(0, previous + 1)];
@@ -852,6 +875,7 @@ async function processQueue(): Promise<void> {
 }
 
 function synthesize(text: string, output: string): Promise<void> {
+  if (!config.ttsEnabled) return Promise.reject(new Error("Twitch TTS is disabled"));
   return new Promise((resolve, reject) => {
     const child = spawn(config.ttsPython,
       [path.join(config.projectRoot, "scripts", "tts_worker.py"), output],
@@ -869,6 +893,7 @@ function synthesize(text: string, output: string): Promise<void> {
 }
 
 export function completeTts(socketId: string, id: unknown, success: boolean): void {
+  if (!config.ttsEnabled) return;
   for (const [channelId, state] of channels) {
     const active = state.active;
     if (active && active.id === id && active.socketId === socketId) {
@@ -879,6 +904,7 @@ export function completeTts(socketId: string, id: unknown, success: boolean): vo
 }
 
 export function overlayTtsDisconnected(socketId: string): void {
+  if (!config.ttsEnabled) return;
   for (const [channelId, state] of channels)
     if (state.active?.socketId === socketId) void finishJob(channelId, false);
 }
@@ -899,6 +925,7 @@ async function finishJob(channelId: string, success: boolean): Promise<void> {
 }
 
 async function settleReward(channelId: string, id: string, status: "FULFILLED" | "CANCELED"): Promise<void> {
+  if (!config.ttsEnabled) return;
   try {
     const settings = await loadTwitch(channelId);
     if (!settings?.rewardId || settings.revoked) return;

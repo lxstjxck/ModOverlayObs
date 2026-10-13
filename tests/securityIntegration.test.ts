@@ -51,7 +51,8 @@ vi.mock("../src/server/config", () => ({
     twitchClientId: "oauth-test-client",
     twitchClientSecret: "oauth-test-secret",
     twitchOAuthRedirectUri: "",
-    oauthTokenEncryptionKey: "1".repeat(64)
+    oauthTokenEncryptionKey: "1".repeat(64),
+    ttsEnabled: false
   }
 }));
 
@@ -244,6 +245,7 @@ beforeEach(async () => {
   await prisma.user.deleteMany();
   for (const name of await files()) await fs.unlink(path.join(config.uploadDir, name));
   config.maxTotalUploadSize = 10240;
+  config.ttsEnabled = false;
   config.twitchOAuthRedirectUri = "";
   const streamer = await prisma.streamer.create({
     data: { displayName: "Test", overlayToken: "overlay-old" }
@@ -876,7 +878,76 @@ it("rejects denied, expired and underscoped Twitch callbacks without creating a 
   expect(await prisma.user.count({ where: { twitchUserId: { not: null } } })).toBe(0);
 });
 
+it("disables TTS connections, speech and reward mutations while preserving settings and OBS", async () => {
+  const legacyKey = `tts:twitch:${streamerId}`;
+  await prisma.settings.create({ data: { key: legacyKey, value: "existing-encrypted-tts-settings" } });
+  const twitchOwner = await prisma.user.create({ data: {
+    username: "twitch:disabled", displayName: "Disabled TTS owner", passwordHash: "!twitch-oauth-only",
+    twitchUserId: "tts-disabled", twitchLogin: "tts-disabled"
+  } });
+  const channel = await prisma.streamer.create({ data: {
+    displayName: "Disabled TTS channel", overlayToken: "overlay-disabled-tts",
+    ownerUserId: twitchOwner.id, twitchBroadcasterId: "tts-disabled", twitchLogin: "tts-disabled"
+  } });
+  await addSession(twitchOwner.id, "tts-disabled-session");
+  await prisma.session.update({ where: { tokenHash: hashSessionToken("tts-disabled-session") },
+    data: { authMethod: "TWITCH", twitchMode: "streamer" } });
+  const modernKey = `tts:twitch:${channel.id}`;
+  await prisma.settings.create({ data: { key: modernKey, value: "existing-modern-tts-settings" } });
+  const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+  const played = vi.fn();
+  overlay.on("tts:play", played);
+  const webSocket = vi.fn();
+  vi.stubGlobal("WebSocket", webSocket);
+  const settingsScan = vi.spyOn(prisma.settings, "findMany");
+  const originalFetch = globalThis.fetch;
+  const twitchRequests: string[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    if (String(input).includes("twitch.tv")) twitchRequests.push(String(input));
+    return originalFetch(input, init);
+  });
+  try {
+    startTts(realtime);
+    expect(webSocket).not.toHaveBeenCalled();
+    expect(settingsScan).not.toHaveBeenCalled();
+    expect(await (await fetch(`${baseUrl}/api/tts`, { headers: headers() })).json()).toMatchObject({
+      available: false, configured: false, connected: false, enabled: false, ready: false
+    });
+    expect(await (await fetch(`${baseUrl}/api/tts/channels/${channel.id}`, { headers: headers("tts-disabled-session") })).json()).toMatchObject({
+      available: false, configured: false, connected: false, enabled: false, ready: false
+    });
+    const blocked = [
+      [`/api/tts/connect`, "GET", headers()],
+      [`/api/tts/callback?state=invalid`, "GET", headers()],
+      [`/api/tts/reward`, "POST", headers()],
+      [`/api/tts/reward`, "PATCH", headers()],
+      [`/api/tts/channels/${channel.id}/connect`, "GET", headers("tts-disabled-session")],
+      [`/api/tts/channels/${channel.id}/enabled`, "PUT", headers("tts-disabled-session")],
+      [`/api/tts/channels/${channel.id}/reward`, "POST", headers("tts-disabled-session")],
+      [`/api/tts/channels/${channel.id}/reward`, "PATCH", headers("tts-disabled-session")]
+    ] as const;
+    for (const [route, method, auth] of blocked) {
+      const response = await fetch(`${baseUrl}${route}`, { method, headers: auth, redirect: "manual" });
+      expect(response.status, `${method} ${route}`).toBe(503);
+      expect((await response.json() as { error: string }).error).toContain("временно недоступен");
+    }
+    expect((await fetch(`${baseUrl}/api/tts/audio/unknown`)).status).toBe(503);
+    overlay.emit("tts:done", { id: "unused" });
+    expect(played).not.toHaveBeenCalled();
+    expect(await files()).toEqual([]);
+    expect(twitchRequests).toEqual([]);
+    expect((await prisma.settings.findUniqueOrThrow({ where: { key: legacyKey } })).value).toBe("existing-encrypted-tts-settings");
+    expect((await prisma.settings.findUniqueOrThrow({ where: { key: modernKey } })).value).toBe("existing-modern-tts-settings");
+    expect((await fetch(`${baseUrl}/api/obs`, { headers: headers() })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: headers("tts-disabled-session") })).status).toBe(200);
+  } finally {
+    stopTts();
+    vi.unstubAllGlobals();
+  }
+});
+
 it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
+  config.ttsEnabled = true;
   const session = await fetch(`${baseUrl}/api/auth/me`, { headers: headers() });
   expect(session.status).toBe(200);
   const { csrfToken } = (await session.json()) as { csrfToken: string };
@@ -917,6 +988,7 @@ it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
 });
 
 it("binds Twitch OAuth to the owner session and stores tokens encrypted", async () => {
+  config.ttsEnabled = true;
   config.twitchClientId = "test-client";
   config.twitchClientSecret = "test-secret";
   config.ttsPython = "/test/python";
@@ -1015,6 +1087,7 @@ it("binds Twitch OAuth to the owner session and stores tokens encrypted", async 
 });
 
 it("runs two Twitch TTS channels independently across OAuth, queues, revocation and restart", async () => {
+  config.ttsEnabled = true;
   config.twitchClientId = "tts-test-client";
   config.twitchClientSecret = "tts-test-secret";
   config.ttsPython = process.execPath;

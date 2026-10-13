@@ -89,4 +89,20 @@ describe("Twitch dashboard presentation", () => {
     expect(html).toContain('role="alert"');
     expect(html).toContain("Ошибка доступа");
   });
+
+  it("shows Coming Soon instead of TTS settings when the server disables it", () => {
+    const html = render({ tts: {
+      available: false, configured: true, connected: true, enabled: true,
+      error: null, queueLength: 0, broadcasterLogin: "creator",
+      rewardId: "existing-reward", rewardCost: 1000, ready: false
+    } });
+    expect(html).toContain("Twitch TTS");
+    expect(html).toContain("Скоро появится");
+    expect(html).toContain("Озвучивание сообщений зрителей за баллы канала Twitch. Функция находится в разработке и станет доступна позже.");
+    expect(html).not.toContain("Подключить Twitch TTS");
+    expect(html).not.toContain("Создать награду TTS");
+    expect(html).not.toContain("Сохранить стоимость");
+    expect(html).not.toContain("Включить TTS");
+    expect(html).not.toContain("Стоимость награды");
+  });
 });

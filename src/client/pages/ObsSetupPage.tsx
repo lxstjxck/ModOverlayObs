@@ -100,7 +100,13 @@ export function ObsSetupPage() {
               </li>
               <li>Place the Browser Source above the game or capture source.</li>
             </ol>
-            {tts && (
+            {tts && !tts.available ? (
+              <section className="tts-setup" role="status">
+                <h2>Twitch TTS</h2>
+                <strong>Скоро появится</strong>
+                <p>Озвучивание сообщений зрителей за баллы канала Twitch. Функция находится в разработке и станет доступна позже.</p>
+              </section>
+            ) : tts && (
               <section className="tts-setup">
                 <h2>Twitch TTS</h2>
                 <p>
