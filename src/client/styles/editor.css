@@ -20,7 +20,7 @@
 .moderator-app :is(button, input, select, textarea) {
   font-family: inherit;
 }
-.moderator-app :is(button, input, select, textarea, summary):focus-visible,
+.moderator-app :is(button, a, input, select, textarea, summary):focus-visible,
 .moderator-app .media-drop-zone:focus-within {
   outline: 2px solid var(--ui-accent-strong);
   outline-offset: 2px;
@@ -79,26 +79,6 @@
   color: var(--ui-muted);
   letter-spacing: 0.08em;
 }
-.moderator-app .editor-channel {
-  display: grid;
-  gap: 1px;
-  min-width: 120px;
-  max-width: 240px;
-  padding-left: 18px;
-  border-left: 1px solid var(--ui-border);
-}
-.moderator-app .editor-channel-label {
-  color: var(--ui-muted);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-}
-.moderator-app .editor-channel strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-}
 .moderator-app .topbar-status {
   margin-left: auto;
 }
@@ -122,27 +102,34 @@
 .moderator-app .server-presence.offline .presence-copy strong {
   color: #e9a4b5;
 }
-.moderator-app .setup-link {
-  border-color: var(--ui-border-accent);
-  color: var(--ui-accent-strong);
+.moderator-app .channel-login-presence {
+  min-width: 0;
+  max-width: 220px;
 }
-.moderator-app .editor-add-text {
+.moderator-app .server-presence {
+  min-width: 0;
+  white-space: normal;
+}
+.moderator-app .server-presence svg {
+  flex: none;
+  color: #e9a4b5;
+}
+.moderator-app .server-presence .presence-copy strong {
+  max-width: none;
+  white-space: normal;
+}
+.moderator-app .setup-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 34px;
-  padding: 0 11px;
-  border-color: var(--ui-accent);
-  background: var(--ui-accent);
-  color: #17131e;
-  font-size: 11px;
-  font-weight: 700;
-  white-space: nowrap;
+  gap: 7px;
+  border: 1px solid var(--ui-border-accent);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface-raised);
+  text-decoration: none;
+  color: var(--ui-accent-strong);
 }
-.moderator-app .editor-add-text:hover:not(:disabled) {
-  border-color: var(--ui-accent-strong);
-  background: var(--ui-accent-strong);
-  color: #17131e;
+.moderator-app .setup-link:hover {
+  background: #272330;
 }
 .moderator-app .workspace {
   grid-template-columns: minmax(260px, 290px) minmax(0, 1fr) minmax(250px, 275px);
@@ -472,14 +459,6 @@
   background: var(--ui-surface-raised);
   color: var(--ui-ink);
 }
-@media (max-width: 1450px) {
-  .moderator-app .topbar {
-    flex-wrap: nowrap;
-  }
-  .moderator-app .account-presence {
-    display: none;
-  }
-}
 @media (max-width: 1180px) {
   .moderator-app .workspace {
     grid-template-columns: 260px minmax(0, 1fr);
@@ -504,13 +483,13 @@
     width: auto;
     margin-right: 0;
   }
-  .moderator-app .editor-channel {
-    flex: 1;
-    min-width: 0;
-  }
   .moderator-app .topbar-status {
     width: 100%;
     margin-left: 0;
+    flex-wrap: wrap;
+  }
+  .moderator-app .server-presence {
+    flex: 1 0 100%;
   }
   .moderator-app .topbar-tools {
     width: 100%;
@@ -555,13 +534,12 @@
   .moderator-app .brand-copy small {
     display: none;
   }
-  .moderator-app .editor-channel {
-    padding-left: 10px;
-  }
-  .moderator-app .server-presence,
   .moderator-app .obs-presence {
     flex: 1;
     justify-content: center;
+  }
+  .moderator-app .channel-login-presence {
+    flex: 1;
   }
   .moderator-app .setup-link {
     flex: 1;

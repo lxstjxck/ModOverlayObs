@@ -3,9 +3,7 @@ import {
   ClipboardList,
   LogOut,
   Monitor,
-  RefreshCw,
-  Type,
-  UserRound
+  RefreshCw
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -17,6 +15,7 @@ import type {
   OverlayElement,
   PermissionMap,
   PresenceState,
+  Role,
   StreamerView,
   UserView
 } from "../../shared/types";
@@ -48,6 +47,81 @@ interface MediaResponse {
   media: MediaItem[];
 }
 
+export function EditorTopbar({
+  streamer,
+  role,
+  path,
+  overlayConnected,
+  connectionIssue,
+  onLogout
+}: {
+  streamer: StreamerView;
+  role: Role;
+  path: string;
+  overlayConnected: boolean;
+  connectionIssue: boolean;
+  onLogout: () => void;
+}) {
+  const channelEditor = path.startsWith("/channel/");
+  const backLink = channelEditor ? (role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup";
+  const backLabel = channelEditor ? (role === "OWNER" ? "Панель канала" : "Мои каналы") : "OBS Setup";
+  const twitchLogin = streamer.twitchLogin?.trim() || null;
+
+  return (
+    <header className="topbar">
+      <div className="topbar-brand">
+        <span className="brand-symbol">
+          <BrandMark />
+        </span>
+        <span className="brand-copy">
+          <strong>
+            LXST <span>OVERLAY</span>
+          </strong>
+          <small>
+            Broadcast Console <span aria-hidden="true">/</span> v{appVersion}
+          </small>
+        </span>
+      </div>
+      <div className="topbar-status">
+        {connectionIssue && (
+          <div className="presence server-presence offline" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span className="presence-copy">
+              <strong>Нет соединения. Переподключение…</strong>
+            </span>
+          </div>
+        )}
+        <div className={`presence obs-presence ${overlayConnected ? "online" : "offline"}`}>
+          <span className="status-light" aria-hidden="true" />
+          <span className="presence-copy">
+            <strong>OBS {overlayConnected ? "ONLINE" : "OFFLINE"}</strong>
+          </span>
+        </div>
+        <div className="presence channel-login-presence" title={twitchLogin ?? "Логин канала не указан"}>
+          <span className="presence-copy">
+            <strong>{twitchLogin ? `twitch: ${twitchLogin}` : "twitch: не указан"}</strong>
+          </span>
+        </div>
+      </div>
+      <div className="topbar-tools">
+        <a className="setup-link" href={backLink}>
+          <ClipboardList size={16} aria-hidden="true" />
+          {backLabel}
+        </a>
+        <button
+          className="logout-button"
+          type="button"
+          title="Sign out"
+          aria-label="Sign out"
+          onClick={onLogout}
+        >
+          <LogOut size={16} />
+        </button>
+      </div>
+    </header>
+  );
+}
+
 export function ModeratorApp() {
   const [user, setUser] = useState<UserView | null>(null);
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
@@ -55,6 +129,7 @@ export function ModeratorApp() {
   const [mediaLoading, setMediaLoading] = useState(true);
   const [uploadingCount, setUploadingCount] = useState(0);
   const [connected, setConnected] = useState(false);
+  const [connectionIssue, setConnectionIssue] = useState(false);
   const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
   const [emotesOpened, setEmotesOpened] = useState(false);
   const [preview, setPreview] = useState<OverlayElement[]>([]);
@@ -210,6 +285,7 @@ export function ModeratorApp() {
     });
     socket.on("disconnect", () => {
       setConnected(false);
+      setConnectionIssue(true);
       history.current = { undo: [], redo: [] };
       for (const timer of previewPatchTimers.current.values()) window.clearTimeout(timer);
       previewPatchTimers.current.clear();
@@ -218,10 +294,11 @@ export function ModeratorApp() {
       transientPatches.current.clear();
       for (const timer of transformTimers.current.values()) window.clearTimeout(timer);
       transformTimers.current.clear();
-      setError("Connection lost. Reconnecting; unconfirmed changes may not have been saved.");
     });
+    socket.on("connect_error", () => setConnectionIssue(true));
     socket.on("connect", () => {
       setConnected(true);
+      setConnectionIssue(false);
       setError((current) =>
         current.startsWith("Connection lost.") || current.startsWith("Нет соединения с сервером.")
           ? ""
@@ -695,83 +772,14 @@ export function ModeratorApp() {
         }
       }}
     >
-      <header className="topbar">
-        <div className="topbar-brand">
-          <span className="brand-symbol">
-            <BrandMark />
-          </span>
-          <span className="brand-copy">
-            <strong>
-              LXST <span>OVERLAY</span>
-            </strong>
-            <small>
-              Broadcast Console <span aria-hidden="true">/</span> v{appVersion}
-            </small>
-          </span>
-        </div>
-        <div className="editor-channel" title={streamer.displayName}>
-          <span className="editor-channel-label">КАНАЛ</span>
-          <strong>{streamer.displayName}</strong>
-        </div>
-        <div className="topbar-status">
-          <div className={`presence server-presence ${connected ? "online" : "offline"}`}>
-            <span className="status-light" aria-hidden="true" />
-            <span className="presence-copy">
-              <strong>СЕРВЕР {connected ? "ОНЛАЙН" : "ОФЛАЙН"}</strong>
-            </span>
-          </div>
-          <div
-            className={`presence obs-presence ${presence.overlayConnected ? "online" : "offline"}`}
-          >
-            <span className="status-light" aria-hidden="true" />
-            <span className="presence-copy">
-              <strong>OBS {presence.overlayConnected ? "ONLINE" : "OFFLINE"}</strong>
-            </span>
-          </div>
-          <div
-            className="presence account-presence"
-            aria-label={`Текущая учетная запись: ${user.username}`}
-          >
-            <UserRound size={16} aria-hidden="true" />
-            <span className="presence-copy">
-              <strong className="account-name">{user.username}</strong>
-            </span>
-          </div>
-        </div>
-        <div className="topbar-tools">
-          <button
-            className="editor-add-text"
-            type="button"
-            disabled={!canEditCanvas || !connected}
-            onClick={() => emit("preview:add", { type: "TEXT", text: "New text" })}
-          >
-            <Type size={16} aria-hidden="true" /> Добавить текст
-          </button>
-          <button
-            className="setup-link"
-            type="button"
-            onClick={() =>
-              (window.location.href = window.location.pathname.startsWith("/channel/")
-                ? user.role === "OWNER"
-                  ? "/streamer"
-                  : "/channels"
-                : "/obs-setup")
-            }
-          >
-            <ClipboardList size={16} />
-            {window.location.pathname.startsWith("/channel/") ? "К списку каналов" : "OBS Setup"}
-          </button>
-          <button
-            className="logout-button"
-            type="button"
-            title="Sign out"
-            aria-label="Sign out"
-            onClick={() => void logout()}
-          >
-            <LogOut size={16} />
-          </button>
-        </div>
-      </header>
+      <EditorTopbar
+        streamer={streamer}
+        role={user.role}
+        path={window.location.pathname}
+        overlayConnected={presence.overlayConnected}
+        connectionIssue={connectionIssue}
+        onLogout={() => void logout()}
+      />
 
       {error && (
         <div className="toast">
