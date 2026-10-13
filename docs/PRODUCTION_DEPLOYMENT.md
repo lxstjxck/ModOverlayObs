@@ -93,7 +93,9 @@ sha256sum -c "$BACKUP_DIR/SHA256SUMS"
 
 ## Проверка миграций на копии
 
-Три SQL-миграции: `20261012_twitch_oauth_stage1`, `20261012_channel_access_stage2`, `20261012_channel_identity_unique`. Первая могла быть частично внесена прежним `db push` без истории Prisma. Сначала восстановить недостающие объекты первой миграции скриптом, затем **только если она полностью соответствует SQL и отсутствует в `_prisma_migrations`** зарегистрировать её. `scripts/apply-twitch-oauth-migration.mjs` ведёт отдельный журнал `SchemaMigration`; это не запись Prisma.
+Четыре SQL-миграции идут по порядку: `20261011_initial_baseline` → `20261012_twitch_oauth_stage1` → `20261013_channel_access_stage2` → `20261013_channel_identity_unique`. Baseline получена из схемы Git до OAuth. На существующей базе её только регистрируют после сверки исходных объектов; SQL baseline к непустой базе не применяют. OAuth могла быть частично внесена прежним `db push`: восстановить недостающие объекты скриптом, затем **только если она полностью соответствует SQL и отсутствует в `_prisma_migrations`** зарегистрировать её. `scripts/apply-twitch-oauth-migration.mjs` ведёт отдельный журнал `SchemaMigration`; это не запись Prisma.
+
+Опубликованный SQL этапов доступа и уникальности не изменён, но их каталоги переименованы для правильной сортировки. Если `_prisma_migrations` содержит старые имена `20261012_channel_access_stage2` или `20261012_channel_identity_unique`, после проверки объектов зарегистрировать соответствующие новые имена через `migrate resolve --applied`. Старые записи остаются в журнале; Prisma 6.12 после регистрации новых имён считает схему актуальной. Если старый этап отсутствует, не отмечать новое имя как применённое. Частично применённый этап требует отдельного разбора.
 
 Получить новый код после backup, пока сервис остановлен. **ОПАСНО: переключение checkout и `npm ci` меняют файлы приложения.** `git status --short` должен быть пустым. Если рабочие изменения есть, сначала разбирать их вручную.
 
@@ -120,12 +122,15 @@ sqlite3 "$RESTORE_CHECK/modoverlay.db" "SELECT name FROM sqlite_master WHERE typ
 sqlite3 "$RESTORE_CHECK/modoverlay.db" "SELECT migration_name, finished_at, rolled_back_at FROM _prisma_migrations;" 2>/dev/null || true
 ```
 
-Если первая миграция уже записана как применённая, пропустить `migrate resolve`. Если есть частично применённая **вторая или третья** миграция, либо неизвестная история Prisma, остановиться: `migrate deploy` не должен угадывать состояние. Перед третьей миграцией проверить уникальность ненулевых `twitchBroadcasterId` на копии.
+Если миграция уже записана под текущим именем, пропустить её `migrate resolve`. Если есть частично применённый этап либо неизвестная история Prisma, остановиться: `migrate deploy` не должен угадывать состояние. Перед этапом уникальности проверить дубликаты ненулевых `twitchBroadcasterId` на копии. Проверить исходные таблицы/индексы baseline и объекты старых этапов по отчёту `inspect-sqlite-migrations.mjs` до регистрации.
 
 ```bash
 sqlite3 "$RESTORE_CHECK/modoverlay.db" 'SELECT twitchBroadcasterId, COUNT(*) FROM Streamer WHERE twitchBroadcasterId IS NOT NULL GROUP BY twitchBroadcasterId HAVING COUNT(*) > 1;'
-# ОПАСНО: только на копии, только если stage1 полна и отсутствует в истории Prisma.
+# ОПАСНО: только на копии; каждая команда resolve условна и требует проверки объектов.
+npx prisma migrate resolve --applied 20261011_initial_baseline
 npx prisma migrate resolve --applied 20261012_twitch_oauth_stage1
+npx prisma migrate resolve --applied 20261013_channel_access_stage2
+npx prisma migrate resolve --applied 20261013_channel_identity_unique
 # ОПАСНО: изменяет только копию, указанную через DATABASE_URL.
 npx prisma migrate deploy
 npx prisma migrate status
@@ -148,8 +153,11 @@ node scripts/reconcile-twitch-oauth-stage1.mjs --database "$DB"
 # ОПАСНО: только если dry run выявил недостающие объекты, как на копии.
 node scripts/reconcile-twitch-oauth-stage1.mjs --database "$DB" --apply
 node scripts/reconcile-twitch-oauth-stage1.mjs --database "$DB"
-# ОПАСНО: только если stage1 полна и отсутствует в истории Prisma.
+# ОПАСНО: выполнять только те resolve, которые потребовались при репетиции.
+npx prisma migrate resolve --applied 20261011_initial_baseline
 npx prisma migrate resolve --applied 20261012_twitch_oauth_stage1
+npx prisma migrate resolve --applied 20261013_channel_access_stage2
+npx prisma migrate resolve --applied 20261013_channel_identity_unique
 # ОПАСНО: применяет миграции к рабочей DB; сверить DATABASE_URL перед запуском.
 npx prisma migrate deploy
 npx prisma migrate status
@@ -161,7 +169,7 @@ sudo nginx -t
 sudo systemctl start modoverlay.service
 ```
 
-Пропустить условные `--apply` и `migrate resolve`, если они не нужны; не выполнять их механически. При уже применённых всех трёх миграциях `migrate deploy` должен сообщить об отсутствии ожидающих миграций. **Никогда не использовать** `prisma migrate reset`, `prisma db push`, `--force-reset`, `--accept-data-loss` на рабочей DB. Текущие изменения не меняют Prisma schema, сохранённые медиа или объекты; миграции нужны из-за предыдущих коммитов относительно старой версии VPS. Для Twitch OAuth из предыдущих версий нужны `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_OAUTH_REDIRECT_URI`, `OAUTH_TOKEN_ENCRYPTION_KEY`; проверить `PUBLIC_ORIGIN`, `DOMAIN`, `ORIGIN_ALLOWLIST`, `TTS_ENABLED=false` и сохранение прежнего `SESSION_SECRET`. `TTS_PYTHON` не требуется, пока TTS выключен.
+Пропустить условные `--apply` и `migrate resolve`, если они не нужны; не выполнять их механически. При зарегистрированных всех четырёх текущих именах `migrate deploy` должен сообщить об отсутствии ожидающих миграций. **Никогда не использовать** `prisma migrate reset`, `prisma db push`, `--force-reset`, `--accept-data-loss` на рабочей DB. Текущие изменения не меняют Prisma schema, сохранённые медиа или объекты; миграции нужны из-за предыдущих коммитов относительно старой версии VPS. Для Twitch OAuth из предыдущих версий нужны `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_OAUTH_REDIRECT_URI`, `OAUTH_TOKEN_ENCRYPTION_KEY`; проверить `PUBLIC_ORIGIN`, `DOMAIN`, `ORIGIN_ALLOWLIST`, `TTS_ENABLED=false` и сохранение прежнего `SESSION_SECRET`. `TTS_PYTHON` не требуется, пока TTS выключен.
 
 ## Validation
 

@@ -17,7 +17,8 @@
 
 ```bash
 npm ci
-npm run db:push
+npm run db:prepare
+npx prisma migrate deploy
 npm run dev
 ```
 
@@ -43,7 +44,7 @@ node scripts/reset-legacy-owner-password.mjs --database $dbPath --apply
 
 ### Обновление существующей SQLite-базы
 
-`prisma migrate deploy` выдаёт P3005 на непустой базе без истории Prisma. При этом изменения первой миграции могли уже попасть в схему через прежний `prisma db push`. Поэтому сначала сравните фактическую схему с `20261012_twitch_oauth_stage1`, затем регистрируйте её как применённую. Никогда не отмечайте вторую миграцию выполненной до появления её полей и таблиц.
+`prisma migrate deploy` выдаёт P3005 на непустой базе без истории Prisma. Baseline `20261011_initial_baseline` описывает исходную схему до OAuth; на существующей базе её нужно зарегистрировать через `migrate resolve --applied` только после проверки исходных таблиц, столбцов и индексов. Изменения OAuth могли уже попасть в схему через прежний `prisma db push`; перед регистрацией stage1 проверьте её отдельным скриптом.
 
 Остановите приложение и сохраните копию `uploads/`. В PowerShell из корня проекта выполните:
 
@@ -65,11 +66,20 @@ node scripts/reconcile-twitch-oauth-stage1.mjs --database $dbPath
 
 Скрипт сверяет SQL первой миграции с таблицами, столбцами и индексами, выполняет только недостающие аддитивные операции в одной транзакции и проверяет результат. При несовместимой уже существующей схеме он останавливается без регистрации миграции; требуется ручной разбор. Если вывод `missing` пуст, `--apply` не нужен. Старый `scripts/apply-twitch-oauth-migration.mjs` использует отдельный журнал `SchemaMigration` и не заменяет регистрацию в Prisma.
 
-Только когда первая миграция полностью проверена, а в `_prisma_migrations` она ещё не записана, зарегистрируйте её. Затем примените вторую миграцию обычным способом:
+SQL опубликованных миграций не изменён. Для правильной сортировки `20261012_channel_access_stage2` и `20261012_channel_identity_unique` переименованы в `20261013_channel_access_stage2` и `20261013_channel_identity_unique`. Старые имена могут уже находиться в журнале Prisma: после проверки объектов соответствующего этапа зарегистрируйте новое имя через `migrate resolve --applied`, чтобы SQL не выполнился повторно. Если этап ещё не применялся, не регистрируйте его: `migrate deploy` выполнит его. Отчёт `inspect-sqlite-migrations.mjs` показывает журнал, таблицы, столбцы и индексы. При частично применённом этапе остановитесь.
+
+На копии базы, а затем при утверждённом обновлении на остановленной рабочей базе, выполните только подходящие команды:
 
 ```powershell
 $env:DATABASE_URL = 'file:' + $dbPath.Replace('\','/')
+# Только если исходная схема есть, а baseline ещё не записана.
+npx prisma migrate resolve --applied 20261011_initial_baseline
+# Только если stage1 полностью присутствует и ещё не записана.
 npx prisma migrate resolve --applied 20261012_twitch_oauth_stage1
+# Только если старый stage2 записан и его объекты полностью присутствуют.
+npx prisma migrate resolve --applied 20261013_channel_access_stage2
+# Только если старый identity_unique записан и уникальный индекс присутствует.
+npx prisma migrate resolve --applied 20261013_channel_identity_unique
 npx prisma migrate deploy
 npx prisma migrate status
 npx prisma migrate diff --from-url $env:DATABASE_URL --to-schema-datamodel prisma/schema.prisma --script
@@ -77,7 +87,7 @@ npx prisma generate
 node scripts/inspect-sqlite-migrations.mjs $dbPath
 ```
 
-Если первая миграция уже числится в истории Prisma, пропустите `migrate resolve`. Если поля второй миграции уже частично присутствуют, остановитесь и разберите схему до `migrate deploy`. Третья миграция `20261012_channel_identity_unique` добавляет уникальный индекс Twitch broadcaster ID; перед ней проверьте отсутствие дубликатов непустого `twitchBroadcasterId` в копии базы. `migrate diff` должен вывести `This is an empty migration`. После обновления сравните отпечатки и числа записей, проверьте legacy-вход, Twitch OAuth и прежний OBS Overlay URL. Не применяйте к существующей базе `migrate reset`, `db push --force-reset` или `--accept-data-loss`. Контейнер не меняет схему при старте; обновление production требует отдельной подготовки и резервной копии.
+Если миграция уже числится под новым именем, пропустите соответствующий `migrate resolve`. Старые записи остаются в истории; Prisma 6.12 после регистрации новых имён сообщает `Database schema is up to date!`. Перед `20261013_channel_identity_unique` проверьте отсутствие дубликатов непустого `twitchBroadcasterId` в копии базы. `migrate diff` должен вывести `This is an empty migration`. После обновления сравните отпечатки и числа записей, проверьте legacy-вход, Twitch OAuth и прежний OBS Overlay URL. Не применяйте к существующей базе `migrate reset`, `db push --force-reset` или `--accept-data-loss`. Контейнер не меняет схему при старте; обновление production требует отдельной подготовки и резервной копии.
 
 Полотно делится на область **SPAWN** для подготовки элементов и область внутри красной рамки, которую видит OBS. Изменения элементов внутри рамки отображаются в оверлее сразу.
 
@@ -95,7 +105,8 @@ Overlay URL содержит токен доступа. Не публикуйт�
 
 ```bash
 npm ci
-npm run db:push
+npm run db:prepare
+npx prisma migrate deploy
 npm run build
 npm start
 ```
