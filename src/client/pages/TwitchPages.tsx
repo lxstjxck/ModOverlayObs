@@ -22,10 +22,11 @@ import { ActionLink, FeatureCard, SectionHeading } from "../components/ui/Landin
 type TwitchMe = { user: TwitchProfileView; mode: TwitchMode; csrfToken: string };
 export function TwitchLandingPage() {
   return (
-    <main className="landing-page">
+    <main className="landing-page overlay-landing">
       <header className="landing-header landing-shell">
         <BrandIdentity className="landing-brand" />
         <nav aria-label="Навигация по странице">
+          <a className="landing-header-home" href="/">← LXST</a>
           <a href="#how-it-works">Как работает</a>
           <a href="#features">Возможности</a>
         </nav>

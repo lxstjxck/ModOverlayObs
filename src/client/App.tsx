@@ -4,6 +4,7 @@ import { ObsSetupPage } from "./pages/ObsSetupPage";
 import { OverlayPage } from "./pages/OverlayPage";
 import { TwitchLoginPage } from "./pages/TwitchLoginPage";
 import { TwitchLandingPage, TwitchDashboardPage } from "./pages/TwitchPages";
+import { EcosystemPage } from "./pages/EcosystemPage";
 
 export function App() {
   const path = window.location.pathname;
@@ -11,8 +12,9 @@ export function App() {
     return <OverlayPage token={decodeURIComponent(path.replace("/overlay/", ""))} />;
   }
   if (path === "/") {
-    return <TwitchLandingPage />;
+    return <EcosystemPage />;
   }
+  if (path === "/overlay") return <TwitchLandingPage />;
   if (path === "/login") return <TwitchLoginPage />;
   if (path === "/legacy-login") {
     return <LoginPage />;
