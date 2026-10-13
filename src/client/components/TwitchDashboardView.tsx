@@ -301,7 +301,9 @@ export function TwitchDashboardView(props: DashboardProps) {
                       >
                         Открыть редактор <ArrowUpRight size={18} aria-hidden="true" />
                       </a>
-                    ) : !streamerChannel ? (
+                    ) : streamerChannel?.role === "owner" &&
+                      streamerChannel.status === "unconnected" &&
+                      streamerChannel.id === null ? (
                       <button
                         className="lxst-button lxst-button-primary"
                         type="button"
@@ -311,7 +313,13 @@ export function TwitchDashboardView(props: DashboardProps) {
                         {connecting ? "Подключаем…" : "Подключить канал"}
                       </button>
                     ) : (
-                      <p className="lxst-muted">Проверьте доступ к каналу Twitch.</p>
+                      <p className="lxst-muted">
+                        {streamerChannel?.status === "denied"
+                          ? "Доступ к каналу Twitch запрещён."
+                          : streamerChannel?.status === "error"
+                            ? "Не удалось проверить доступ к каналу Twitch."
+                            : "Проверьте доступ к каналу Twitch."}
+                      </p>
                     )}
                   </div>
                 </div>

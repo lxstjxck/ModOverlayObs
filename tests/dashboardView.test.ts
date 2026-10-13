@@ -80,7 +80,39 @@ describe("Twitch dashboard presentation", () => {
     expect(html).toContain('type="password"');
     expect(html).toContain('aria-label="Копировать URL"');
     expect(html).toContain('href="/channel/channel-1"');
+    expect(html).toContain('id="obs"');
+    expect(html).toContain('id="canvas"');
+    expect(html).not.toContain("Подключить канал");
     expect(html).toContain("Статус браузерного клиента");
+  });
+
+  it("offers connection for a selected owner whose Twitch channel is not connected", () => {
+    const html = render({ channels: [{ ...channel, id: null, status: "unconnected" }] });
+    expect(html).toContain("Подключить канал");
+    expect(html).not.toContain("Проверьте доступ к каналу Twitch.");
+    expect(html).not.toContain('href="/channel/channel-1"');
+    expect(html).not.toContain('id="obs"');
+    expect(html).not.toContain('id="canvas"');
+    expect(render({ channels: [{ ...channel, id: null, status: "unconnected" }], connecting: true }))
+      .toContain("Подключаем…");
+  });
+
+  it("does not offer channel creation or owner controls to an unconnected moderator", () => {
+    const html = render({ mode: "moderator", channels: [{ ...channel, id: null, role: "moderator", status: "unconnected" }] });
+    expect(html).not.toContain("Подключить канал");
+    expect(html).not.toContain('id="obs"');
+    expect(html).not.toContain('id="canvas"');
+    expect(html).not.toContain('href="/channel/channel-1"');
+  });
+
+  it.each([
+    ["denied", "Доступ к каналу Twitch запрещён."],
+    ["error", "Не удалось проверить доступ к каналу Twitch."]
+  ] as const)("shows the %s owner access error without a connection button", (status, message) => {
+    const html = render({ channels: [{ ...channel, id: null, status }] });
+    expect(html).toContain(message);
+    expect(html).not.toContain("Подключить канал");
+    expect(html).not.toContain('id="obs"');
   });
 
   it("does not offer the editor when moderator access is denied", () => {
