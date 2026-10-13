@@ -70,6 +70,7 @@ import { getChannelEmotes } from "../src/server/emotes";
 import { ensureRuntimeState } from "../src/server/bootstrap";
 import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModeratorBan, syncModerators } from "../src/server/channelAccess";
 import { startTts, stopTts } from "../src/server/tts";
+import type { OverlayReloadStatus } from "../src/shared/types";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -278,6 +279,76 @@ afterAll(async () => {
   await prisma.$disconnect();
   // root is the unique directory created by mkdtemp above.
   await fs.rm(fixture.root, { recursive: true, force: true });
+});
+
+it("reloads only the owner's channel and waits for each OBS reconnect and state sync", async () => {
+  const owners = [];
+  for (const [name, token] of [["alpha", "alpha-session"], ["beta", "beta-session"]] as const) {
+    const user = await prisma.user.create({ data: {
+      username: `twitch:${name}`, displayName: name, passwordHash: "!", twitchUserId: name
+    } });
+    await prisma.twitchOAuthConnection.create({ data: {
+      userId: user.id, mode: "streamer", encryptedAccess: encryptOAuthToken("access"),
+      encryptedRefresh: encryptOAuthToken("refresh"), scopesJson: "[]",
+      expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date()
+    } });
+    await prisma.session.create({ data: {
+      userId: user.id, tokenHash: hashSessionToken(token), authMethod: "TWITCH",
+      twitchMode: "streamer", expiresAt: new Date(Date.now() + 3600_000)
+    } });
+    const channel = await prisma.streamer.create({ data: {
+      displayName: name, overlayToken: `${name}-overlay`, ownerUserId: user.id, twitchBroadcasterId: name
+    } });
+    owners.push({ channel, token });
+  }
+  const [alpha, beta] = owners;
+  const route = (id: string) => `${baseUrl}/api/auth/twitch/channels/${id}/overlay-reload`;
+  const post = (id: string, token: string) => fetch(route(id), { method: "POST", headers: headers(token) });
+  expect((await post(alpha.channel.id, alpha.token)).status).toBe(503);
+  expect((await post(alpha.channel.id, beta.token)).status).toBe(403);
+  const mod = await prisma.user.create({ data: {
+    username: "twitch:channel-mod", displayName: "Channel mod", passwordHash: "!", twitchUserId: "channel-mod"
+  } });
+  await prisma.session.create({ data: {
+    userId: mod.id, tokenHash: hashSessionToken("channel-mod-session"),
+    authMethod: "TWITCH", twitchMode: "moderator", expiresAt: new Date(Date.now() + 3600_000)
+  } });
+  expect((await post(alpha.channel.id, "channel-mod-session")).status).toBe(403);
+
+  const first = await socketClient({ overlayToken: alpha.channel.overlayToken }, "overlay:state");
+  const second = await socketClient({ overlayToken: alpha.channel.overlayToken }, "overlay:state");
+  const foreign = await socketClient({ overlayToken: beta.channel.overlayToken }, "overlay:state");
+  const command = (socket: Socket) => new Promise<{ attemptId: string }>((resolve) => {
+    socket.once("overlay:reload", (payload: { attemptId: string }, acknowledge: () => void) => {
+      acknowledge();
+      resolve(payload);
+    });
+  });
+  const firstCommand = command(first);
+  const secondCommand = command(second);
+  const foreignCommand = vi.fn();
+  foreign.on("overlay:reload", foreignCommand);
+  const started = await post(alpha.channel.id, alpha.token);
+  expect(started.status).toBe(200);
+  const operation = await started.json() as OverlayReloadStatus;
+  expect(operation).toMatchObject({ state: "waiting", total: 2, received: 0, reconnected: 0 });
+  const [one, two] = await Promise.all([firstCommand, secondCommand]);
+  expect(one.attemptId).not.toBe(two.attemptId);
+  expect(foreignCommand).not.toHaveBeenCalled();
+  expect((await post(alpha.channel.id, alpha.token)).status).toBe(409);
+  const statusUrl = `${route(alpha.channel.id)}/${operation.id}`;
+  await expect.poll(async () => (await (await fetch(statusUrl, { headers: headers(alpha.token) })).json() as OverlayReloadStatus).received).toBe(2);
+  first.emit("overlay:reload:ready", { attemptId: one.attemptId });
+  first.disconnect();
+  second.disconnect();
+  const replacementOne = await socketClient({ overlayToken: alpha.channel.overlayToken }, "overlay:state");
+  replacementOne.emit("overlay:reload:ready", { attemptId: one.attemptId });
+  const replacementTwo = await socketClient({ overlayToken: alpha.channel.overlayToken }, "overlay:state");
+  replacementTwo.emit("overlay:reload:ready", { attemptId: two.attemptId });
+  await expect.poll(async () => (await (await fetch(statusUrl, { headers: headers(alpha.token) })).json() as OverlayReloadStatus).reconnected).toBe(2);
+  expect(await (await fetch(statusUrl, { headers: headers(alpha.token) })).json()).toMatchObject({ state: "completed", received: 2 });
+  expect((await fetch(statusUrl, { headers: headers(beta.token) })).status).toBe(403);
+  expect((await fetch(`${route(beta.channel.id)}/${operation.id}`, { headers: headers(beta.token) })).status).toBe(404);
 });
 
 it("requires a non-template password before creating the first owner", async () => {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import type {
   ObsSetupView,
+  OverlayReloadStatus,
   PresenceState,
   CanvasChangeMode,
   StreamerView,
@@ -175,6 +176,9 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   const [tts, setTts] = useState<TtsSetupView | null>(null);
   const [ttsCost, setTtsCost] = useState(1000);
   const [ttsBusy, setTtsBusy] = useState(false);
+  const [reloadStatus, setReloadStatus] = useState<OverlayReloadStatus | null>(null);
+  const [reloadMessage, setReloadMessage] = useState("");
+  const [reloadStarting, setReloadStarting] = useState(false);
 
   async function load(currentMode: TwitchMode) {
     setLoading(true);
@@ -298,6 +302,40 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     };
   }, [ownChannel?.id]);
 
+  useEffect(() => {
+    if (!ownChannel?.id || reloadStatus?.state !== "waiting") return;
+    const channelId = ownChannel.id;
+    const operationId = reloadStatus.id;
+    let active = true;
+    const timer = window.setInterval(() => {
+      void api<OverlayReloadStatus>(`/api/auth/twitch/channels/${encodeURIComponent(channelId)}/overlay-reload/${encodeURIComponent(operationId)}`)
+        .then((status) => { if (active) { setReloadStatus(status); setReloadMessage(""); } })
+        .catch(() => { if (active) setReloadMessage("Не удалось получить статус перезагрузки. Проверьте подключение OBS."); });
+    }, 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [ownChannel?.id, reloadStatus?.id, reloadStatus?.state]);
+
+  async function reloadOverlay() {
+    if (!ownChannel?.id || reloadStarting || reloadStatus?.state === "waiting") return;
+    setReloadStarting(true);
+    setReloadMessage("");
+    try {
+      const status = await api<OverlayReloadStatus>(
+        `/api/auth/twitch/channels/${encodeURIComponent(ownChannel.id)}/overlay-reload`,
+        { method: "POST" }
+      );
+      setReloadStatus(status);
+    } catch (reloadError) {
+      setReloadMessage(reloadError instanceof ApiError && reloadError.status === 503
+        ? "OBS Overlay сейчас не подключён. Откройте Browser Source в OBS и повторите попытку."
+        : reloadError instanceof ApiError && reloadError.status === 409
+          ? "Перезагрузка уже выполняется или команда была отправлена недавно. Подождите и повторите попытку."
+          : reloadError instanceof Error ? reloadError.message : "Не удалось отправить команду OBS");
+    } finally {
+      setReloadStarting(false);
+    }
+  }
+
   async function saveCanvas(mode: CanvasChangeMode) {
     if (!ownChannel?.id || !canvas || savingCanvas) return;
     setSavingCanvas(true);
@@ -393,6 +431,8 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   return <TwitchDashboardView
     mode={mode} me={me?.user ?? null} channels={channels} moderators={moderators}
     obs={obs} canvas={canvas} presence={presence} tts={tts}
+    reloadStatus={reloadStatus} reloadMessage={reloadMessage} reloadBusy={reloadStarting || reloadStatus?.state === "waiting"}
+    onReloadOverlay={() => void reloadOverlay()}
     width={width} height={height} sourceWidth={sourceWidth} sourceHeight={sourceHeight}
     ttsCost={ttsCost} ratio={ratio} changed={Boolean(changed)} dimensionsValid={dimensionsValid}
     loading={loading} connecting={connecting} savingCanvas={savingCanvas} ttsBusy={ttsBusy}

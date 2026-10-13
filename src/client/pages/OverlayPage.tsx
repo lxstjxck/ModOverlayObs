@@ -42,6 +42,8 @@ export function OverlayPage({ token }: { token: string }) {
   }, []);
 
   useEffect(() => {
+    const storageKey = "lxst-overlay-reload-attempt";
+    const pendingAttempt = window.sessionStorage.getItem(storageKey);
     const socket = io({
       path: "/socket.io",
       query: { overlayToken: token }
@@ -70,6 +72,16 @@ export function OverlayPage({ token }: { token: string }) {
     socket.on("overlay:state", (state: OverlayElement[]) => {
       canonicalCanvas.current = state;
       setCanvas(state);
+      if (pendingAttempt) {
+        socket.emit("overlay:reload:ready", { attemptId: pendingAttempt });
+        window.sessionStorage.removeItem(storageKey);
+      }
+    });
+    socket.on("overlay:reload", (payload: { attemptId?: unknown }, acknowledge?: () => void) => {
+      if (typeof payload?.attemptId !== "string") return;
+      window.sessionStorage.setItem(storageKey, payload.attemptId);
+      acknowledge?.();
+      window.setTimeout(() => window.location.reload(), 100);
     });
     socket.on("overlay:transform", (transform: ElementTransform) => {
       const base = canonicalCanvas.current.find((item) => item.id === transform.id);

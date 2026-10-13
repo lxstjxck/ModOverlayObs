@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type {
   CanvasChangeMode,
   ObsSetupView,
+  OverlayReloadStatus,
   PresenceState,
   StreamerView,
   TwitchChannelView,
@@ -23,6 +24,10 @@ type DashboardProps = {
   canvas: StreamerView | null;
   presence: PresenceState | null;
   tts: TtsSetupView | null;
+  reloadStatus: OverlayReloadStatus | null;
+  reloadMessage: string;
+  reloadBusy: boolean;
+  onReloadOverlay: () => void;
   width: string;
   height: string;
   sourceWidth: string;
@@ -81,6 +86,10 @@ export function TwitchDashboardView(props: DashboardProps) {
     canvas,
     presence,
     tts,
+    reloadStatus,
+    reloadMessage,
+    reloadBusy,
+    onReloadOverlay,
     width,
     height,
     sourceWidth,
@@ -344,6 +353,19 @@ export function TwitchDashboardView(props: DashboardProps) {
                           Установите размер {obs.canvasWidth} × {obs.canvasHeight}.
                         </li>
                       </ol>
+                      <button className="lxst-button lxst-button-secondary" type="button"
+                        disabled={reloadBusy} onClick={onReloadOverlay}>
+                        <RefreshCw size={17} aria-hidden="true" /> Перезагрузить OBS Overlay
+                      </button>
+                      <p className="lxst-muted" role="status">
+                        {reloadMessage || (reloadStatus?.state === "waiting"
+                          ? `Команда получена: ${reloadStatus.received} из ${reloadStatus.total}. Переподключились и получили состояние: ${reloadStatus.reconnected} из ${reloadStatus.total}.`
+                          : reloadStatus?.state === "completed"
+                            ? `OBS Overlay переподключён и синхронизирован: ${reloadStatus.reconnected} из ${reloadStatus.total}.`
+                            : reloadStatus?.state === "timed_out"
+                              ? `Время ожидания истекло. Команду получили ${reloadStatus.received} из ${reloadStatus.total}, переподключились ${reloadStatus.reconnected}. Если Browser Source завис, удалённая команда не поможет: перезагрузите источник в OBS вручную.`
+                              : "Если Browser Source не отвечает, перезагрузите источник в OBS вручную.")}
+                      </p>
                     </>
                   ) : (
                     <p className="lxst-muted" role="status">

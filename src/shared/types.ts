@@ -152,6 +152,14 @@ export interface PresenceState {
   moderators: Array<{ id: string; displayName: string }>;
 }
 
+export interface OverlayReloadStatus {
+  id: string;
+  state: "waiting" | "completed" | "timed_out";
+  total: number;
+  received: number;
+  reconnected: number;
+}
+
 export interface ObsSetupView {
   overlayUrl: string;
   canvasWidth: number;

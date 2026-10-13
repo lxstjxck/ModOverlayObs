@@ -16,6 +16,8 @@ import {
 import { clientIp, createRateLimitMiddleware } from "./security";
 import { canAccessChannel, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators, verifyStreamerIdentity } from "./channelAccess";
 import { getDefaultStreamer } from "./state";
+import { overlayReload } from "./overlayReload";
+import { requestOverlayReload } from "./socket";
 
 const stateCookie = "mod_overlay_twitch_state";
 const stateTtlMs = 10 * 60_000;
@@ -393,6 +395,43 @@ export function twitchAuthRouter(): express.Router {
     } catch {
       response.status(503).json({ error: "Twitch access verification unavailable" });
     }
+  });
+
+  async function ownsChannel(request: express.Request): Promise<boolean> {
+    const session = await getSessionFromCookieHeader(request.headers.cookie);
+    if (!session || session.twitchMode !== "streamer") return false;
+    const channelId = String(request.params.channelId);
+    const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true } });
+    return channel?.ownerUserId === session.user.id && await canAccessChannel(session, channelId);
+  }
+
+  router.post("/channels/:channelId/overlay-reload", requireTwitchAuth, async (request, response) => {
+    if (!(await ownsChannel(request))) {
+      response.status(403).json({ error: "Only this channel's owner can reload its OBS overlay" });
+      return;
+    }
+    const result = requestOverlayReload(String(request.params.channelId));
+    response.setHeader("Cache-Control", "no-store");
+    if (result.code === 503) {
+      response.status(503).json({ error: "OBS overlay is not connected" });
+      return;
+    }
+    if (result.code === 409) {
+      response.status(409).json({ error: "Reload is already running or was requested recently" });
+      return;
+    }
+    response.json(result.status);
+  });
+
+  router.get("/channels/:channelId/overlay-reload/:operationId", requireTwitchAuth, async (request, response) => {
+    if (!(await ownsChannel(request))) {
+      response.status(403).json({ error: "Only this channel's owner can view reload status" });
+      return;
+    }
+    const status = overlayReload.get(String(request.params.channelId), String(request.params.operationId));
+    response.setHeader("Cache-Control", "no-store");
+    if (!status) { response.status(404).json({ error: "Reload operation not found" }); return; }
+    response.json(status);
   });
 
   router.get("/channels/:channelId/moderators", requireTwitchAuth, async (request, response) => {

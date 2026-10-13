@@ -21,6 +21,7 @@ import { withCanvasLock } from "./canvasSettings";
 import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
+import { overlayReload } from "./overlayReload";
 import { completeTts, overlayTtsDisconnected } from "./tts";
 import { isOriginAllowed, WindowRateLimiter } from "./security";
 import {
@@ -68,6 +69,13 @@ export async function broadcastCanvasState(streamerId: string): Promise<void> {
   const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
   canvasIo.to(moderatorRoom(streamerId)).to(overlayRoom(streamerId)).emit("canvas:state", toStreamerView(channel));
   await emitPreviewState(canvasIo, streamerId);
+}
+
+export function requestOverlayReload(streamerId: string) {
+  const sockets = [...(overlaysByStreamer.get(streamerId) ?? [])]
+    .map((id) => canvasIo?.sockets.sockets.get(id))
+    .filter((socket): socket is Socket => Boolean(socket));
+  return overlayReload.start(streamerId, sockets);
 }
 
 setInterval(() => {
@@ -250,6 +258,9 @@ async function handleOverlayConnection(
   });
   socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
   socket.on("tts:error", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, false));
+  socket.on("overlay:reload:ready", (payload: { attemptId?: unknown } = {}) => {
+    overlayReload.ready(streamerId, socket.id, payload?.attemptId);
+  });
   await withCanvasLock(streamerId, async () => {
     const state = await getPreviewState(streamerId);
     const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
