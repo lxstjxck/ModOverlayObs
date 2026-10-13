@@ -21,7 +21,14 @@ function renderHeader(overrides: Partial<ComponentProps<typeof EditorTopbar>> = 
         canvasHeight: 1080,
         canvasRevision: "r1"
       },
-      role: "MODERATOR",
+      user: {
+        id: "mod-1",
+        username: "twitch:123",
+        displayName: "Current Moderator",
+        twitchLogin: "signed_in_mod",
+        role: "MODERATOR",
+        permissions: {} as ComponentProps<typeof EditorTopbar>["user"]["permissions"]
+      },
       path: "/channel/channel-1",
       overlayConnected: false,
       connectionIssue: false,
@@ -35,6 +42,7 @@ describe("editor topbar", () => {
   it("shows the current channel login and the moderator channel list route", () => {
     const html = renderHeader();
     expect(html).toContain("twitch: channel_one");
+    expect(html).toContain("moderator: signed_in_mod");
     expect(html).toContain('href="/channels"');
     expect(html).toContain("Мои каналы");
     expect(html).toContain("OBS OFFLINE");
@@ -74,9 +82,12 @@ describe("editor topbar", () => {
   });
 
   it("uses the owner dashboard or OBS setup route where appropriate", () => {
-    expect(renderHeader({ role: "OWNER" })).toContain('href="/streamer"');
-    expect(renderHeader({ role: "OWNER" })).toContain("Панель управления");
+    const owner = renderHeader({ user: { id: "owner", username: "owner", displayName: "Owner", role: "OWNER", permissions: {} as ComponentProps<typeof EditorTopbar>["user"]["permissions"], twitchLogin: "owner_name" } });
+    expect(owner).toContain('href="/streamer"');
+    expect(owner).toContain("Панель управления");
+    expect(owner).not.toContain("moderator:");
     expect(renderHeader({ path: "/app" })).toContain('href="/obs-setup"');
+    expect(renderHeader({ user: { id: "legacy", username: "legacy", displayName: "Legacy", role: "MODERATOR", permissions: {} as ComponentProps<typeof EditorTopbar>["user"]["permissions"] } })).not.toContain("moderator:");
   });
 
   it("shows a warning only while the server connection has a problem", () => {
@@ -107,4 +118,34 @@ it("keeps the left Media Text tool available for preview placement", () => {
   expect(html).toContain('class="text-tool"');
   expect(html).toContain("Text</button>");
   expect(html).not.toContain('class="text-tool" type="button" disabled');
+});
+
+it("shows the complete media list with selection and separate canvas actions", () => {
+  vi.stubGlobal("React", React);
+  const html = renderToStaticMarkup(
+    React.createElement(MediaLibrary, {
+      media: [
+        { id: "one", filename: "one.png", originalName: "One.png", mimeType: "image/png", type: "IMAGE", size: 100, url: "/uploads/one.png", durationMs: null, width: 20, height: 20, uploadedBy: null, uploadedAt: "2026-10-14" },
+        { id: "two", filename: "two.mp3", originalName: "Two.mp3", mimeType: "audio/mpeg", type: "AUDIO", size: 200, url: "/uploads/two.mp3", durationMs: null, width: null, height: null, uploadedBy: null, uploadedAt: "2026-10-14" }
+      ],
+      loading: false,
+      uploadingCount: 0,
+      error: "",
+      canPlace: true,
+      onUpload: () => {},
+      onAdd: () => {},
+      onAddUrl: async () => false,
+      onDelete: () => {},
+      onAddText: () => {},
+      canDelete: true
+    })
+  );
+  expect(html).toContain("One.png");
+  expect(html).toContain("Two.mp3");
+  expect(html).toContain("Выбрано: 0 из 2");
+  expect(html).toContain("Выбрать все");
+  expect(html).toContain("Снять выбор");
+  expect(html).toContain('aria-label="Добавить One.png на холст"');
+  expect(html).not.toContain('type="search"');
+  expect(html).not.toContain('aria-label="Тип медиа"');
 });

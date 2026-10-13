@@ -1,5 +1,5 @@
-import { FilePlus2, Link, Music, Search, Trash2, Type, Upload, Video } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { FilePlus2, Link, Music, Trash2, Type, Upload, Video } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { MediaItem, MediaType } from "../../shared/types";
 import { detectMediaTypeFromUrl, getEbloPostId, getYouTubeVideoId } from "../../shared/mediaUrl";
 import { formatBytes } from "../utils";
@@ -35,17 +35,6 @@ export function MediaLibrary({
   const [urlError, setUrlError] = useState("");
   const [addingUrl, setAddingUrl] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"ALL" | MediaType>("ALL");
-  const filtered = useMemo(
-    () =>
-      media.filter(
-        (item) =>
-          (filter === "ALL" || item.type === filter) &&
-          item.originalName.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
-      ),
-    [media, query, filter]
-  );
   const selected = media.filter((item) => selectedIds.has(item.id));
 
   useEffect(() => {
@@ -162,29 +151,6 @@ export function MediaLibrary({
           </p>
         )}
       </form>
-      <div className="media-filter-bar">
-        <label className="media-search">
-          <Search size={15} aria-hidden="true" />
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Поиск по названию"
-            aria-label="Поиск медиа"
-          />
-        </label>
-        <select
-          value={filter}
-          onChange={(event) => setFilter(event.target.value as "ALL" | MediaType)}
-          aria-label="Тип медиа"
-        >
-          <option value="ALL">Все типы</option>
-          <option value="IMAGE">Изображения</option>
-          <option value="GIF">GIF</option>
-          <option value="VIDEO">Видео</option>
-          <option value="AUDIO">Аудио</option>
-        </select>
-      </div>
       {error && (
         <p className="media-inline-error" role="alert">
           {error}
@@ -197,23 +163,22 @@ export function MediaLibrary({
       )}
       {canDelete && media.length > 0 && (
         <div className="media-bulk-actions">
+          <span className="media-selection-count" role="status">
+            Выбрано: {selected.length} из {media.length}
+          </span>
           <label className="media-select-all">
             <input
               type="checkbox"
-              disabled={filtered.length === 0}
-              checked={filtered.length > 0 && filtered.every((item) => selectedIds.has(item.id))}
+              checked={selected.length === media.length}
               onChange={(event) =>
-                setSelectedIds(
-                  event.target.checked
-                    ? new Set([...selectedIds, ...filtered.map((item) => item.id)])
-                    : new Set(
-                        [...selectedIds].filter((id) => !filtered.some((item) => item.id === id))
-                      )
-                )
+                setSelectedIds(event.target.checked ? new Set(media.map((item) => item.id)) : new Set())
               }
             />
-            Выбрать видимые
+            Выбрать все
           </label>
+          <button type="button" disabled={selected.length === 0} onClick={() => setSelectedIds(new Set())}>
+            Снять выбор
+          </button>
           <button
             type="button"
             disabled={selected.length === 0}
@@ -231,7 +196,7 @@ export function MediaLibrary({
         </div>
       )}
       <div className="media-list">
-        {filtered.map((item) => (
+        {media.map((item) => (
           <div className="media-row" key={item.id}>
             <div className="media-thumb">
               <MediaThumbnail key={item.url} item={item} />
@@ -276,9 +241,6 @@ export function MediaLibrary({
         ))}
         {!loading && media.length === 0 && (
           <div className="empty-list">Библиотека пуста. Загрузите файл или добавьте ссылку.</div>
-        )}
-        {!loading && media.length > 0 && filtered.length === 0 && (
-          <div className="empty-list">По этому запросу ничего не найдено.</div>
         )}
       </div>
     </aside>

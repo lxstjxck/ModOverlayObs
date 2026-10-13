@@ -1,6 +1,5 @@
 import {
   AlertTriangle,
-  ClipboardList,
   LogOut,
   Monitor,
   RefreshCw
@@ -15,7 +14,6 @@ import type {
   OverlayElement,
   PermissionMap,
   PresenceState,
-  Role,
   StreamerView,
   UserView
 } from "../../shared/types";
@@ -49,23 +47,24 @@ interface MediaResponse {
 
 export function EditorTopbar({
   streamer,
-  role,
+  user,
   path,
   overlayConnected,
   connectionIssue,
   onLogout
 }: {
   streamer: StreamerView;
-  role: Role;
+  user: UserView;
   path: string;
   overlayConnected: boolean;
   connectionIssue: boolean;
   onLogout: () => void;
 }) {
   const channelEditor = path.startsWith("/channel/");
-  const backLink = channelEditor ? (role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup";
-  const backLabel = channelEditor ? (role === "OWNER" ? "Панель управления" : "Мои каналы") : "OBS Setup";
+  const backLink = channelEditor ? (user.role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup";
+  const backLabel = channelEditor ? (user.role === "OWNER" ? "Панель управления" : "Мои каналы") : "OBS Setup";
   const twitchLogin = streamer.twitchLogin?.trim() || null;
+  const moderatorLogin = user.twitchLogin?.trim();
 
   return (
     <header className="topbar">
@@ -102,10 +101,16 @@ export function EditorTopbar({
             <strong>{twitchLogin ? `twitch: ${twitchLogin}` : "twitch: не указан"}</strong>
           </span>
         </div>
+        {user.role !== "OWNER" && moderatorLogin && (
+          <div className="presence moderator-login-presence" title={`moderator: ${moderatorLogin}`}>
+            <span className="presence-copy">
+              <strong>moderator: {moderatorLogin}</strong>
+            </span>
+          </div>
+        )}
       </div>
       <div className="topbar-tools">
         <a className="setup-link" href={backLink}>
-          <ClipboardList size={16} aria-hidden="true" />
           {backLabel}
         </a>
         <button
@@ -730,20 +735,31 @@ export function ModeratorApp() {
     if (deletingMedia || mediaDeleteIds.length === 0) return;
     setDeletingMedia(true);
     setError("");
+    setMediaError("");
     const remaining = [...mediaDeleteIds];
+    const deleted = new Set<string>();
+    let deletionError = "";
     try {
       for (const id of mediaDeleteIds) {
         await api(`/api/media/${encodeURIComponent(id)}`, { method: "DELETE" });
         remaining.shift();
+        deleted.add(id);
       }
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Could not delete media");
+      const reason = deleteError instanceof Error ? deleteError.message : "Не удалось удалить медиа";
+      deletionError = `Удалено: ${deleted.size}. Осталось: ${remaining.length}. ${reason}`;
     } finally {
+      if (deleted.size > 0) setMedia((items) => items.filter((item) => !deleted.has(item.id)));
       setMediaDeleteIds(remaining);
       try {
         await refreshMedia();
       } catch (refreshError) {
-        setError(refreshError instanceof Error ? refreshError.message : "Could not refresh media");
+        const message = refreshError instanceof Error ? refreshError.message : "Не удалось обновить библиотеку";
+        deletionError = deletionError ? `${deletionError} ${message}` : message;
+      }
+      if (deletionError) {
+        setError(deletionError);
+        setMediaError(deletionError);
       }
       setDeletingMedia(false);
     }
@@ -774,7 +790,7 @@ export function ModeratorApp() {
     >
       <EditorTopbar
         streamer={streamer}
-        role={user.role}
+        user={user}
         path={window.location.pathname}
         overlayConnected={presence.overlayConnected}
         connectionIssue={connectionIssue}

@@ -12,6 +12,7 @@ import type {
   TwitchProfileView,
   TtsSetupView
 } from "../../shared/types";
+import { moderatedTwitchChannels, ownTwitchChannel } from "../dashboardNavigation";
 import { BrandIdentity } from "./BrandIdentity";
 import { ChannelAvatar, DashboardSection, StatusPill } from "./ui/DashboardUi";
 
@@ -19,8 +20,7 @@ type DashboardProps = {
   mode: TwitchMode;
   me: TwitchProfileView | null;
   channels: TwitchChannelView[];
-  selectedId: string | null;
-  onSelectChannel: (id: string) => void;
+  onSelectMode: (mode: TwitchMode) => void;
   moderators: TwitchModeratorView[];
   obs: ObsSetupView | null;
   canvas: StreamerView | null;
@@ -83,8 +83,7 @@ export function TwitchDashboardView(props: DashboardProps) {
     mode,
     me,
     channels,
-    selectedId,
-    onSelectChannel,
+    onSelectMode,
     moderators,
     obs,
     canvas,
@@ -121,23 +120,22 @@ export function TwitchDashboardView(props: DashboardProps) {
     setSourceHeight,
     setTtsCost
   } = props;
-  const [query, setQuery] = useState("");
+  const [moderatorQuery, setModeratorQuery] = useState("");
+  const [channelQuery, setChannelQuery] = useState("");
   const [showObsUrl, setShowObsUrl] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
   useEffect(() => {
     setShowObsUrl(false);
     setCopyStatus("");
   }, [obs?.overlayUrl]);
-  const ownChannel =
-    mode === "streamer"
-      ? channels.find((channel) => channel.twitchId === selectedId && channel.status === "connected" && channel.id)
-      : null;
-  const streamerChannel = mode === "streamer" ? channels.find((channel) => channel.twitchId === selectedId) : null;
+  const streamerChannel = me ? ownTwitchChannel(channels, me.id) : null;
+  const ownChannel = mode === "streamer" && streamerChannel?.status === "connected" && streamerChannel.id
+    ? streamerChannel : null;
   const filteredModerators = moderators.filter((item) =>
-    item.displayName.toLocaleLowerCase().includes(query.toLocaleLowerCase())
+    item.displayName.toLocaleLowerCase().includes(moderatorQuery.toLocaleLowerCase())
   );
-  const filteredChannels = channels.filter((item) =>
-    item.displayName.toLocaleLowerCase().includes(query.toLocaleLowerCase())
+  const filteredChannels = moderatedTwitchChannels(channels, me?.id ?? "").filter((item) =>
+    item.displayName.toLocaleLowerCase().includes(channelQuery.toLocaleLowerCase())
   );
 
   async function copyObsUrl() {
@@ -155,24 +153,12 @@ export function TwitchDashboardView(props: DashboardProps) {
       <header className="lxst-dashboard-header">
         <div className="lxst-shell lxst-dashboard-header-inner">
           <BrandIdentity />
-          {me && (
-            <nav
-              className="lxst-dashboard-nav"
-              aria-label={mode === "streamer" ? "Разделы панели управления" : "Разделы кабинета"}
-            >
-              {mode === "streamer" ? (
-                <>
-                  <a href="#overview">Обзор</a>
-                  <a href="#obs">OBS</a>
-                  <a href="#moderators">Модераторы</a>
-                  <a href="#canvas">Холст</a>
-                  <a href="#tts">TTS</a>
-                </>
-              ) : (
-                <a href="#channels">Каналы</a>
-              )}
-            </nav>
-          )}
+          {me && <nav className="lxst-dashboard-nav" aria-label="Разделы кабинета">
+            {mode === "streamer" ? <>
+              <a href="#overview">Обзор</a>
+              {ownChannel && <><a href="#obs">OBS</a><a href="#moderators">Модераторы</a><a href="#canvas">Холст</a><a href="#tts">TTS</a></>}
+            </> : <a href="#channels">Каналы</a>}
+          </nav>}
           {me && (
             <button className="lxst-header-logout" type="button" onClick={onLogout}>
               <LogOut size={16} aria-hidden="true" />
@@ -209,21 +195,12 @@ export function TwitchDashboardView(props: DashboardProps) {
         </div>
         {me && (
           <div className="lxst-dashboard-toolbar">
-            <label className="lxst-field">
-              Канал
-              <select value={selectedId ?? ""} onChange={(event) => onSelectChannel(event.target.value)}>
-                {channels.map((channel) => (
-                  <option key={channel.twitchId} value={channel.twitchId}>
-                    {channel.displayName} ({channel.role === "owner" ? "владелец" : "модератор"})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span>
-              {mode === "streamer"
-                ? "Панель управления"
-                : "Каналы Twitch, которые вы модерируете"}
-            </span>
+            <nav className="lxst-mode-switch" aria-label="Режим кабинета">
+              <button type="button" aria-current={mode === "streamer" ? "page" : undefined}
+                onClick={() => onSelectMode("streamer")}>Стример</button>
+              <button type="button" aria-current={mode === "moderator" ? "page" : undefined}
+                onClick={() => onSelectMode("moderator")}>Модератор</button>
+            </nav>
             <button
               type="button"
               className="lxst-quiet-button"
@@ -287,11 +264,11 @@ export function TwitchDashboardView(props: DashboardProps) {
                     >
                       {presence
                         ? presence.overlayConnected
-                          ? "Клиент подключён"
-                          : "Клиент не подключён"
+                          ? "OBS подключён"
+                          : "OBS не подключён"
                         : "Проверяется"}
                     </StatusPill>
-                    <span>Статус браузерного клиента; показ сцены в OBS проверяется отдельно.</span>
+                    <span>Статус соединения OBS Browser Source; видимость в эфире проверяется отдельно.</span>
                   </div>
                   <div className="lxst-overview-action">
                     {ownChannel?.id ? (
@@ -322,6 +299,8 @@ export function TwitchDashboardView(props: DashboardProps) {
                       </p>
                     )}
                   </div>
+                  {streamerChannel?.role === "owner" && streamerChannel.status === "unconnected" && streamerChannel.id === null &&
+                    <p className="lxst-muted lxst-connect-hint">Ваш Twitch-канал ещё не подключён к LXST Overlay. Подключите его, чтобы настроить OBS и пригласить модераторов.</p>}
                 </div>
               )}
             </DashboardSection>
@@ -415,8 +394,8 @@ export function TwitchDashboardView(props: DashboardProps) {
                     Поиск модератора
                     <input
                       type="search"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
+                      value={moderatorQuery}
+                      onChange={(event) => setModeratorQuery(event.target.value)}
                       placeholder="Имя модератора"
                     />
                   </label>
@@ -446,7 +425,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                     ))}
                     {filteredModerators.length === 0 && (
                       <p className="lxst-empty">
-                        {query
+                        {moderatorQuery
                           ? "По этому запросу модераторы не найдены."
                           : "Список модераторов пока пуст."}
                       </p>
@@ -737,8 +716,8 @@ export function TwitchDashboardView(props: DashboardProps) {
               Поиск канала
               <input
                 type="search"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                value={channelQuery}
+                onChange={(event) => setChannelQuery(event.target.value)}
                 placeholder="Название канала"
               />
             </label>
@@ -770,7 +749,9 @@ export function TwitchDashboardView(props: DashboardProps) {
                         ? "Редактор доступен"
                         : channel.status === "denied"
                           ? "Доступ к редактору отозван"
-                          : "Редактор сейчас недоступен"}
+                          : channel.status === "unconnected"
+                            ? "Стример ещё не подключил LXST Overlay."
+                            : "Не удалось проверить доступ к редактору."}
                     </p>
                     {channel.status === "connected" && channel.id && (
                       <a
@@ -784,7 +765,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                 ))}
                 {filteredChannels.length === 0 && (
                   <p className="lxst-empty">
-                    {query
+                    {channelQuery
                       ? "По этому запросу каналы не найдены."
                       : "Доступных каналов пока нет. Проверьте роль модератора в Twitch и обновите список."}
                   </p>

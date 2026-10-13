@@ -9,7 +9,7 @@ afterEach(() => vi.unstubAllGlobals());
 const profile = { id: "user-1", login: "creator", displayName: "Creator", avatarUrl: null };
 const channel = {
   id: "channel-1",
-  twitchId: "twitch-1",
+  twitchId: "user-1",
   displayName: "Creator",
   avatarUrl: null,
   status: "connected" as const,
@@ -23,8 +23,7 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     mode: "streamer",
     me: profile,
     channels: [channel],
-    selectedId: channel.twitchId,
-    onSelectChannel: () => {},
+    onSelectMode: () => {},
     moderators: [],
     obs: {
       overlayUrl: "https://example.invalid/overlay/private-value",
@@ -83,12 +82,17 @@ describe("Twitch dashboard presentation", () => {
     expect(html).toContain('id="obs"');
     expect(html).toContain('id="canvas"');
     expect(html).not.toContain("Подключить канал");
-    expect(html).toContain("Статус браузерного клиента");
+    expect(html).toContain("Статус соединения OBS Browser Source");
+    expect(html).toContain("OBS подключён");
+    expect(html).not.toContain("Клиент подключён");
+    expect(html).toContain('aria-current="page">Стример</button>');
+    expect(html).not.toContain("<select value=\"user-1\"");
   });
 
   it("offers connection for a selected owner whose Twitch channel is not connected", () => {
     const html = render({ channels: [{ ...channel, id: null, status: "unconnected" }] });
     expect(html).toContain("Подключить канал");
+    expect(html).toContain("Ваш Twitch-канал ещё не подключён");
     expect(html).not.toContain("Проверьте доступ к каналу Twitch.");
     expect(html).not.toContain('href="/channel/channel-1"');
     expect(html).not.toContain('id="obs"');
@@ -98,8 +102,9 @@ describe("Twitch dashboard presentation", () => {
   });
 
   it("does not offer channel creation or owner controls to an unconnected moderator", () => {
-    const html = render({ mode: "moderator", channels: [{ ...channel, id: null, role: "moderator", status: "unconnected" }] });
+    const html = render({ mode: "moderator", channels: [{ ...channel, id: null, twitchId: "other", role: "moderator", status: "unconnected" }] });
     expect(html).not.toContain("Подключить канал");
+    expect(html).toContain("Стример ещё не подключил LXST Overlay.");
     expect(html).not.toContain('id="obs"');
     expect(html).not.toContain('id="canvas"');
     expect(html).not.toContain('href="/channel/channel-1"');
@@ -116,10 +121,34 @@ describe("Twitch dashboard presentation", () => {
   });
 
   it("does not offer the editor when moderator access is denied", () => {
-    const html = render({ mode: "moderator", channels: [{ ...channel, status: "denied" }] });
+    const html = render({ mode: "moderator", channels: [{ ...channel, twitchId: "other", role: "moderator", status: "denied" }] });
     expect(html).toContain("<h1>Ваши каналы.</h1>");
     expect(html).toContain("Доступ к редактору отозван");
     expect(html).not.toContain('href="/channel/channel-1"');
+  });
+
+  it("shows a Twitch verification error without an editor link", () => {
+    const html = render({ mode: "moderator", channels: [{ ...channel, twitchId: "other", role: "moderator", status: "error" }] });
+    expect(html).toContain("Ошибка проверки");
+    expect(html).toContain("Не удалось проверить доступ к редактору.");
+    expect(html).not.toContain('href="/channel/channel-1"');
+  });
+
+  it("lists moderated channels once, with no owner settings or own-channel duplicate", () => {
+    const moderated = { ...channel, id: "channel-2", twitchId: "other", displayName: "Other", role: "moderator" as const };
+    const html = render({ mode: "moderator", channels: [channel, moderated, { ...moderated, twitchId: profile.id }] });
+    expect(html).toContain("Other");
+    expect(html).toContain('href="/channel/channel-2"');
+    expect(html).not.toContain('href="/channel/channel-1"');
+    expect(html).not.toContain('id="obs"');
+    expect(html).not.toContain('id="canvas"');
+    expect(html).not.toContain('id="tts"');
+    expect(html).toContain('aria-current="page">Модератор</button>');
+  });
+
+  it("uses OBS wording for disconnected Browser Source", () => {
+    expect(render({ presence: { overlayConnected: false, overlayCount: 0, moderators: [] } }))
+      .toContain("OBS не подключён");
   });
 
   it("shows loading, empty and error states without fabricated channels", () => {

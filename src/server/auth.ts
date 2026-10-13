@@ -33,6 +33,7 @@ export function toUserView(user: {
   id: string;
   username: string;
   displayName: string;
+  twitchLogin?: string | null;
   role: "OWNER" | "ADMIN_MODERATOR" | "MODERATOR";
   permissionsJson: string;
 }): UserView {
@@ -40,6 +41,7 @@ export function toUserView(user: {
     id: user.id,
     username: user.username,
     displayName: user.displayName,
+    twitchLogin: user.twitchLogin ?? null,
     role: user.role,
     permissions: parsePermissions(user.role, user.permissionsJson)
   };

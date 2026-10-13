@@ -1,6 +1,7 @@
 import { ArrowLeft, ArrowUpRight, LockKeyhole, Radio, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrandIdentity } from "../components/BrandIdentity";
+import { api } from "../api";
 
 const oauthErrors: Record<string, string> = {
   invalid_state: "Сессия входа истекла. Попробуйте снова.",
@@ -14,6 +15,12 @@ const oauthErrors: Record<string, string> = {
 export function TwitchLoginPage() {
   const error = new URLSearchParams(window.location.search).get("oauth_error");
   const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (error) return;
+    void api("/api/auth/twitch/me")
+      .then(() => window.location.replace("/channels"))
+      .catch(() => undefined);
+  }, [error]);
 
   return (
     <main className="lxst-auth-page">

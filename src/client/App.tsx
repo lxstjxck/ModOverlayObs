@@ -5,6 +5,7 @@ import { OverlayPage } from "./pages/OverlayPage";
 import { TwitchLoginPage } from "./pages/TwitchLoginPage";
 import { TwitchLandingPage, TwitchDashboardPage } from "./pages/TwitchPages";
 import { EcosystemPage } from "./pages/EcosystemPage";
+import { TwitchPopupPage } from "./pages/TwitchPopupPage";
 
 export function App() {
   const path = window.location.pathname;
@@ -16,6 +17,7 @@ export function App() {
   }
   if (path === "/overlay") return <TwitchLandingPage />;
   if (path === "/login") return <TwitchLoginPage />;
+  if (path === "/oauth/popup") return <TwitchPopupPage />;
   if (path === "/legacy-login") {
     return <LoginPage />;
   }

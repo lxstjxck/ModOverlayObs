@@ -1,5 +1,8 @@
 import { ArrowDown, ArrowUpRight } from "lucide-react";
 import { BrandIdentity } from "../components/BrandIdentity";
+import { PublicFooter } from "../components/PublicFooter";
+import { PublicAuthControls } from "../components/PublicAuthControls";
+import { PublicAuthProvider, usePublicAuthContext, type PublicAuthStatus } from "../publicTwitchAuth";
 
 function OverlayIcon() {
   return (
@@ -39,6 +42,11 @@ function ChatIcon() {
 }
 
 export function EcosystemPage() {
+  return <PublicAuthProvider><EcosystemContent /></PublicAuthProvider>;
+}
+
+function EcosystemContent() {
+  const { auth } = usePublicAuthContext();
   return (
     <main className="landing-page ecosystem-page">
       <header className="landing-header landing-shell ecosystem-header">
@@ -46,14 +54,7 @@ export function EcosystemPage() {
         <nav aria-label="Навигация по странице">
           <a href="#services">Сервисы</a>
         </nav>
-        <a
-          className="ecosystem-github"
-          href="https://github.com/lxstjxck"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          GitHub <ArrowUpRight size={15} aria-hidden="true" />
-        </a>
+        <PublicAuthControls compact />
       </header>
 
       <section className="ecosystem-hero landing-shell" aria-labelledby="ecosystem-title">
@@ -93,26 +94,7 @@ export function EcosystemPage() {
         </div>
 
         <div className="ecosystem-service-grid">
-          <article className="ecosystem-service-card ecosystem-service-overlay">
-            <div className="ecosystem-card-top">
-              <span className="ecosystem-service-icon">
-                <OverlayIcon />
-              </span>
-              <span className="ecosystem-status ecosystem-status-live">Доступен</span>
-            </div>
-            <div>
-              <p className="ecosystem-card-kicker">01 / ПРЯМОЙ ЭФИР</p>
-              <h3>LXST Overlay</h3>
-              <p className="ecosystem-card-description">
-                Управляй изображениями, видео, текстом и смайлами на трансляции вместе с командой
-                модераторов.
-              </p>
-            </div>
-            <a className="ecosystem-card-link" href="/overlay">
-              Подробнее <ArrowUpRight size={18} aria-hidden="true" />
-            </a>
-          </article>
-
+          <OverlayServiceCard status={auth.status} />
           <article className="ecosystem-service-card ecosystem-service-chat">
             <div className="ecosystem-card-top">
               <span className="ecosystem-service-icon">
@@ -133,16 +115,36 @@ export function EcosystemPage() {
         </div>
       </section>
 
-      <footer className="landing-footer landing-shell ecosystem-footer">
-        <span>LXST</span>
-        <span>Инструменты для твоего эфира.</span>
-        <span>
-          Created by{" "}
-          <a href="https://github.com/lxstjxck" target="_blank" rel="noopener noreferrer">
-            lxstjxck
-          </a>
-        </span>
-      </footer>
+      <PublicFooter product="LXST" description="Инструменты для твоего эфира." />
     </main>
+  );
+}
+
+export function OverlayServiceCard({ status }: { status: PublicAuthStatus }) {
+  const unavailable = status === "loading" || status === "unavailable";
+  const href = unavailable ? undefined : status === "authenticated" ? "/channels" : "/overlay";
+  return (
+    <a className="ecosystem-service-card ecosystem-service-overlay" href={href}
+      aria-disabled={unavailable || undefined} aria-busy={status === "loading" || undefined}
+      tabIndex={unavailable ? -1 : undefined}>
+      <div className="ecosystem-card-top">
+        <span className="ecosystem-service-icon">
+          <OverlayIcon />
+        </span>
+        <span className="ecosystem-status ecosystem-status-live">Доступен</span>
+      </div>
+      <div>
+        <p className="ecosystem-card-kicker">01 / ПРЯМОЙ ЭФИР</p>
+        <h3>LXST Overlay</h3>
+        <p className="ecosystem-card-description">
+          Управляй изображениями, видео, текстом и смайлами на трансляции вместе с командой
+          модераторов.
+        </p>
+      </div>
+      <span className="ecosystem-card-link">
+        {status === "loading" ? "Проверяем доступ…" : status === "unavailable" ? "Не удалось проверить вход" : status === "authenticated" ? "Мои каналы" : "Подробнее"}
+        {!unavailable && <ArrowUpRight size={18} aria-hidden="true" />}
+      </span>
+    </a>
   );
 }

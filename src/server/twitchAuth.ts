@@ -59,9 +59,9 @@ async function twitchJson<T>(url: string, init: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-function fail(response: express.Response, reason: string): void {
+function fail(response: express.Response, reason: string, popup = false): void {
   response.setHeader("Cache-Control", "no-store");
-  response.redirect(303, `/login?oauth_error=${reason}`);
+  response.redirect(303, popup ? `/oauth/popup?error=${reason}` : `/login?oauth_error=${reason}`);
 }
 
 export function twitchAuthRouter(): express.Router {
@@ -69,12 +69,14 @@ export function twitchAuthRouter(): express.Router {
 
   router.get("/start/:mode", startLimit, async (request, response) => {
     const mode = request.params.mode;
+    const popup = mode === "unified" && request.query.popup === "1";
     if (mode !== "unified" && mode !== "bind") {
       response.status(404).json({ error: "Unknown login mode" });
       return;
     }
     if (!configured()) {
-      response.status(503).json({ error: "Twitch login is not configured" });
+      if (popup) fail(response, "twitch_unavailable", true);
+      else response.status(503).json({ error: "Twitch login is not configured" });
       return;
     }
     const existing = await getSessionFromCookieHeader(request.headers.cookie);
@@ -87,7 +89,8 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     if (mode !== "bind" && existing?.authMethod === "LEGACY") {
-      response.status(409).json({ error: "Sign out of the legacy account before Twitch login" });
+      if (popup) fail(response, "legacy_session", true);
+      else response.status(409).json({ error: "Sign out of the legacy account before Twitch login" });
       return;
     }
     const state = crypto.randomBytes(32).toString("base64url");
@@ -97,7 +100,7 @@ export function twitchAuthRouter(): express.Router {
       data: {
         stateHash: hash(state),
         bindingHash: hash(binding),
-        mode,
+        mode: popup ? "unified_popup" : mode,
         legacySessionHash: mode === "bind" ? hashSessionToken(readSessionToken(request.headers.cookie)!) : null,
         redirectUri: config.twitchOAuthRedirectUri,
         expiresAt: new Date(Date.now() + stateTtlMs)
@@ -130,6 +133,7 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     const grant = await prisma.twitchOAuthState.findUnique({ where: { stateHash: hash(state) } });
+    const popup = grant?.mode === "unified_popup";
     if (
       !grant ||
       grant.bindingHash !== hash(binding) ||
@@ -145,7 +149,7 @@ export function twitchAuthRouter(): express.Router {
         })
       ).count !== 1
     ) {
-      fail(response, "invalid_state");
+      fail(response, "invalid_state", popup);
       return;
     }
     const existing = await getSessionFromCookieHeader(request.headers.cookie);
@@ -154,23 +158,23 @@ export function twitchAuthRouter(): express.Router {
       existing.user.role !== "OWNER" ||
       grant.legacySessionHash !== hashSessionToken(readSessionToken(request.headers.cookie) ?? "")
     )) {
-      fail(response, "legacy_owner_required");
+      fail(response, "legacy_owner_required", popup);
       return;
     }
     if (grant.mode !== "bind" && existing?.authMethod === "LEGACY") {
-      fail(response, "legacy_session");
+      fail(response, "legacy_session", popup);
       return;
     }
     if (request.query.error) {
-      fail(response, "denied");
+      fail(response, "denied", popup);
       return;
     }
     if (
       typeof request.query.code !== "string" ||
       !request.query.code ||
-      (grant.mode !== "unified" && grant.mode !== "bind")
+      (grant.mode !== "unified" && grant.mode !== "unified_popup" && grant.mode !== "bind")
     ) {
-      fail(response, "invalid_response");
+      fail(response, "invalid_response", popup);
       return;
     }
     try {
@@ -197,7 +201,7 @@ export function twitchAuthRouter(): express.Router {
       )
         throw new Error("Invalid token response");
       if (!scopes.every((scope) => tokens.scope.includes(scope))) {
-        fail(response, "insufficient_scope");
+        fail(response, "insufficient_scope", popup);
         return;
       }
       const validated = await twitchJson<{ client_id: string; user_id: string; scopes: string[] }>(
@@ -208,7 +212,7 @@ export function twitchAuthRouter(): express.Router {
           !Array.isArray(validated.scopes))
         throw new Error("Invalid token identity or scopes");
       if (!scopes.every((scope) => validated.scopes.includes(scope))) {
-        fail(response, "insufficient_scope");
+        fail(response, "insufficient_scope", popup);
         return;
       }
       const users = await twitchJson<{
@@ -288,9 +292,9 @@ export function twitchAuthRouter(): express.Router {
       }
       if (existing) await destroySession(request, response);
       await createSession(user.id, response, mode);
-      response.redirect(303, "/channels");
+      response.redirect(303, popup ? "/oauth/popup?success=1" : "/channels");
     } catch {
-      fail(response, "twitch_unavailable");
+      fail(response, "twitch_unavailable", popup);
     }
   });
 

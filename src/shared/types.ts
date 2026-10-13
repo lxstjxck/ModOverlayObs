@@ -24,6 +24,7 @@ export interface UserView {
   displayName: string;
   role: Role;
   permissions: PermissionMap;
+  twitchLogin?: string | null;
 }
 
 export type TwitchMode = "streamer" | "moderator";

@@ -572,6 +572,21 @@ it(
     expect((await prisma.user.findUnique({ where: { twitchUserId: "12345" } }))?.id).toBe(
       account?.id
     );
+    const popupStart = await fetch(`${baseUrl}/api/auth/twitch/start/unified?popup=1`, { redirect: "manual" });
+    const popupState = new URL(popupStart.headers.get("location")!).searchParams.get("state");
+    const popupBinding = popupStart.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
+    const popupResult = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${popupState}&code=popup-code`, {
+      headers: { Cookie: popupBinding }, redirect: "manual"
+    });
+    expect(popupResult.status).toBe(303);
+    expect(popupResult.headers.get("location")).toBe("/oauth/popup?success=1");
+    expect(popupResult.headers.get("location")).not.toMatch(/secret|token|code|state|csrf/i);
+    const popupSession = popupResult.headers.getSetCookie().find((value) => value.startsWith(`${sessionCookieName}=`))!.split(";")[0];
+    expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: popupSession } })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: popupSession } })).status).toBe(200);
+    expect(await prisma.user.count({ where: { twitchUserId: "12345" } })).toBe(1);
+    await prisma.session.update({ where: { tokenHash: hashSessionToken(popupSession.split("=")[1]) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: popupSession } })).status).toBe(401);
   }
 );
 
@@ -666,16 +681,23 @@ it("creates two independent Twitch channels and isolates moderators, OBS, media 
   expect((await fetch(`${baseUrl}/api/auth/me`, { headers: { ...headers("stream-a"), "X-Channel-Id": secondId } })).status).toBe(403);
   const editorMe = await fetch(`${baseUrl}/api/auth/me`, { headers: { ...headers("mod-a"), "X-Channel-Id": firstId } });
   expect(editorMe.status).toBe(200);
-  expect(JSON.stringify(await editorMe.json())).not.toContain(a.overlayToken);
+  const editorMeBody = await editorMe.json() as { user: { twitchLogin: string | null }; streamer: { twitchLogin: string | null } };
+  expect(editorMeBody.user.twitchLogin).toBe("moda");
+  expect(editorMeBody.streamer.twitchLogin).toBe("streama");
+  expect(JSON.stringify(editorMeBody)).not.toContain(a.overlayToken);
   expect((await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("stream-a"), "X-Channel-Id": secondId } })).status).toBe(403);
   const obs = await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("stream-a"), "X-Channel-Id": firstId } });
   expect(obs.status).toBe(200);
   expect(JSON.stringify(await obs.json())).toContain(a.overlayToken);
   expect((await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("mod-a"), "X-Channel-Id": firstId } })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/moderators`, { headers: headers("mod-a") })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/overlay-reload`, { method: "POST", headers: headers("mod-a") })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/tts/channels/${firstId}`, { headers: headers("mod-a") })).status).toBe(404);
   expect((await fetch(`${baseUrl}/api/obs`, { headers: headers("mod-session") })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/streamer`, { headers: headers("mod-session") })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/tts`, { headers: headers("stream-a") })).status).toBe(503);
   const ownCanvas = (await (await fetch(`${baseUrl}/api/auth/me`, { headers: { ...headers("stream-a"), "X-Channel-Id": firstId } })).json()) as { streamer: { canvasRevision: string } };
+  expect((await fetch(`${baseUrl}/api/channels/${firstId}/canvas`, { method: "PUT", headers: { ...headers("mod-a"), "X-Channel-Id": firstId, "Content-Type": "application/json" }, body: JSON.stringify({ width: 1280, height: 720, mode: "keep", expectedRevision: ownCanvas.streamer.canvasRevision }) })).status).toBe(403);
   const resized = await fetch(`${baseUrl}/api/channels/${firstId}/canvas`, { method: "PUT", headers: { ...headers("stream-a"), "X-Channel-Id": firstId, "Content-Type": "application/json" }, body: JSON.stringify({ width: 1280, height: 720, mode: "keep", expectedRevision: ownCanvas.streamer.canvasRevision }) });
   expect(resized.status).toBe(200);
   expect((await prisma.streamer.findUniqueOrThrow({ where: { id: secondId } })).canvasWidth).toBe(1920);
@@ -699,6 +721,7 @@ it("creates two independent Twitch channels and isolates moderators, OBS, media 
     expect((await fetch(`${baseUrl}${media.url}?overlayToken=${a.overlayToken}`, { method, headers: { Range: "bytes=0-1" } })).status).toBe(206);
   }
   expect((await fetch(`${baseUrl}/api/media/${media.id}`, { method: "DELETE", headers: { ...headers("stream-b"), "X-Channel-Id": secondId } })).ok).toBe(false);
+  expect((await fetch(`${baseUrl}/api/media/${media.id}`, { method: "DELETE", headers: { ...headers("mod-a"), "X-Channel-Id": firstId } })).status).toBe(403);
   expect(await prisma.media.findUnique({ where: { id: media.id } })).not.toBeNull();
   const overlayA = await socketClient({ overlayToken: a.overlayToken }, "overlay:state");
   const overlayB = await socketClient({ overlayToken: b.overlayToken }, "overlay:state");
@@ -937,6 +960,14 @@ it("rejects denied, expired and underscoped Twitch callbacks without creating a 
   );
   expect(deniedResponse.headers.get("location")).toBe("/login?oauth_error=denied");
   expect(tokenRequests).toHaveLength(0);
+  const popupStart = await fetch(`${baseUrl}/api/auth/twitch/start/unified?popup=1`, { redirect: "manual" });
+  const popupState = new URL(popupStart.headers.get("location")!).searchParams.get("state");
+  const popupCookie = popupStart.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
+  const popupDenied = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${popupState}&error=access_denied`, {
+    headers: { Cookie: popupCookie }, redirect: "manual"
+  });
+  expect(popupDenied.headers.get("location")).toBe("/oauth/popup?error=denied");
+  expect(popupDenied.headers.getSetCookie().some((value) => value.startsWith(`${sessionCookieName}=`))).toBe(false);
   const expired = await start();
   await prisma.twitchOAuthState.update({
     where: {

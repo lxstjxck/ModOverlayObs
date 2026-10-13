@@ -156,9 +156,11 @@ export function PropertiesPanel({
 
       {isPlayableMedia(selected) && (
         <MediaControls
+          key={selected.id}
           selected={selected}
           mediaElement={mediaElement}
           videoTime={videoTime}
+          onSeek={(current) => setVideoTime((time) => ({ ...time, current }))}
           update={update}
         />
       )}
@@ -229,11 +231,13 @@ function MediaControls({
   selected,
   mediaElement,
   videoTime,
+  onSeek,
   update
 }: {
   selected: OverlayElement;
   mediaElement: PlayableNode | null;
   videoTime: { current: number; duration: number };
+  onSeek: (current: number) => void;
   update: (patch: Partial<OverlayElement>) => void;
 }) {
   const [positionText, setPositionText] = useState("00:00");
@@ -244,6 +248,8 @@ function MediaControls({
   const scrubSecondsRef = useRef(0);
   const scrubbingRef = useRef(false);
   const positionDraftRef = useRef("00:00");
+  const positionInputRef = useRef<HTMLInputElement>(null);
+  const committedPositionRef = useRef(false);
   const showHours = videoTime.duration >= 3600;
 
   useEffect(() => {
@@ -267,6 +273,7 @@ function MediaControls({
       Math.max(0, videoTime.duration > 0 ? Math.min(seconds, videoTime.duration) : seconds)
     );
     seekMediaNode(mediaElement, bounded);
+    onSeek(bounded);
     update({
       props: {
         ...selected.props,
@@ -303,6 +310,17 @@ function MediaControls({
       return;
     }
     seek(seconds);
+    setEditingPosition(false);
+    committedPositionRef.current = true;
+    positionInputRef.current?.blur();
+  }
+
+  function cancelPosition() {
+    const current = formatMediaPosition(videoTime.current, showHours);
+    positionDraftRef.current = current;
+    setPositionText(current);
+    setPositionError("");
+    setEditingPosition(false);
   }
   function runCommand(command: "play" | "pause" | "stop" | "restart") {
     if (command === "play") {
@@ -404,6 +422,7 @@ function MediaControls({
         <label className="field">
           TIMECODE
           <input
+            ref={positionInputRef}
             type="text"
             inputMode="numeric"
             placeholder={showHours ? "00:00:00" : "00:00"}
@@ -414,7 +433,20 @@ function MediaControls({
               positionDraftRef.current = positionText;
               setEditingPosition(true);
             }}
-            onBlur={() => setEditingPosition(false)}
+            onBlur={() => {
+              if (committedPositionRef.current) {
+                committedPositionRef.current = false;
+                return;
+              }
+              cancelPosition();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                cancelPosition();
+                event.currentTarget.blur();
+              }
+            }}
             onChange={(event) => {
               positionDraftRef.current = event.target.value;
               setPositionText(event.target.value);

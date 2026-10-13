@@ -51,7 +51,7 @@
 }
 .moderator-app .topbar {
   min-height: 66px;
-  padding: 8px 18px;
+  padding: 8px var(--space-4);
   border-bottom-color: var(--ui-border);
   background: #0e0d12;
   box-shadow: none;
@@ -81,9 +81,10 @@
 }
 .moderator-app .topbar-status {
   margin-left: auto;
+  flex-wrap: wrap;
 }
 .moderator-app .topbar-tools {
-  margin-left: 6px;
+  margin-left: var(--space-1);
 }
 .moderator-app .presence {
   border-color: var(--ui-border);
@@ -106,6 +107,10 @@
   min-width: 0;
   max-width: 220px;
 }
+.moderator-app .moderator-login-presence {
+  min-width: 0;
+  max-width: 220px;
+}
 .moderator-app .server-presence {
   min-width: 0;
   white-space: normal;
@@ -121,12 +126,15 @@
 .moderator-app .setup-link {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-2);
   border: 1px solid var(--ui-border-accent);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface-raised);
   text-decoration: none;
   color: var(--ui-accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
 }
 .moderator-app .setup-link:hover {
   background: #272330;
@@ -185,48 +193,28 @@
   color: var(--ui-accent-strong);
 }
 .moderator-app .url-tool {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2);
 }
 .moderator-app .url-tool button {
   border-color: var(--ui-border-accent);
   color: var(--ui-accent);
 }
-.moderator-app .media-filter-bar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 105px;
-  gap: 6px;
-  margin-bottom: 12px;
-}
-.moderator-app .media-search {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding-left: 9px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-sm);
-  background: #0c0c10;
+.moderator-app .media-selection-count {
+  grid-column: 1 / -1;
   color: var(--ui-muted);
-}
-.moderator-app .media-search:focus-within {
-  border-color: var(--ui-border-accent);
-}
-.moderator-app .media-search input {
-  width: 100%;
-  min-height: 38px;
-  padding: 4px 5px;
-  border: 0;
-  background: transparent;
   font-size: 11px;
 }
-.moderator-app .media-filter-bar select {
-  width: 100%;
-  min-height: 38px;
-  padding: 5px;
-  font-size: 11px;
+.moderator-app .media-bulk-actions {
+  gap: var(--space-2);
+}
+.moderator-app .media-bulk-actions button.danger {
+  grid-column: 1 / -1;
+  border-color: #93405a;
+  background: #3a1d2b;
+  color: #ffd4df;
 }
 .moderator-app .media-inline-error {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-2);
   color: #f2a9ba;
   font-size: 11px;
   line-height: 1.5;
@@ -260,10 +248,12 @@
 }
 .moderator-app .media-select {
   accent-color: var(--ui-accent);
+  outline: 1px solid var(--ui-accent-strong);
+  outline-offset: 1px;
 }
 .moderator-app .media-list .empty-list,
 .moderator-app .properties-panel .empty-list {
-  padding: 20px 10px;
+  padding: var(--space-4) var(--space-2);
   border: 1px dashed var(--ui-border);
   border-radius: var(--ui-radius-sm);
   line-height: 1.6;
@@ -282,7 +272,7 @@
 .moderator-app .emote-channel input,
 .moderator-app .emote-custom-form input {
   min-height: 36px;
-  padding: 7px;
+  padding: var(--space-2);
 }
 .moderator-app .emote-section {
   padding-top: 8px;
@@ -293,7 +283,7 @@
 }
 .moderator-app .emote-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 7px;
+  gap: var(--space-2);
 }
 .moderator-app .emote-item > button:first-child {
   min-height: 78px;
@@ -312,11 +302,11 @@
   color: #ffd0dc;
 }
 .moderator-app .workspace-center {
-  padding: 12px 14px 8px;
+  padding: 12px var(--space-3) 8px;
   background: var(--ui-bg);
 }
 .moderator-app .workspace-heading {
-  padding: 2px 2px 12px;
+  padding: var(--space-1) var(--space-1) 12px;
 }
 .moderator-app .workspace-heading h1 {
   color: var(--ui-ink);
@@ -429,7 +419,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   padding: 4px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
@@ -450,7 +440,7 @@
 }
 .moderator-app .layer-toggle {
   min-height: 30px;
-  padding-inline: 9px;
+  padding-inline: var(--space-2);
   color: var(--ui-accent-strong);
 }
 .moderator-app .media-delete-dialog {
@@ -477,7 +467,7 @@
   .moderator-app .topbar {
     flex-wrap: wrap;
     gap: 8px;
-    padding: 10px 12px;
+    padding: var(--space-2) 12px;
   }
   .moderator-app .topbar-brand {
     width: auto;
@@ -523,8 +513,8 @@
     min-height: 360px;
   }
   .moderator-app .workspace-caption {
-    gap: 8px 14px;
-    padding-top: 10px;
+    gap: 8px var(--space-3);
+    padding-top: var(--space-2);
   }
   .moderator-app .emote-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -539,6 +529,9 @@
     justify-content: center;
   }
   .moderator-app .channel-login-presence {
+    flex: 1;
+  }
+  .moderator-app .moderator-login-presence {
     flex: 1;
   }
   .moderator-app .setup-link {
