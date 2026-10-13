@@ -152,7 +152,10 @@ export function TwitchDashboardView(props: DashboardProps) {
         <div className="lxst-shell lxst-dashboard-header-inner">
           <BrandIdentity />
           {me && (
-            <nav className="lxst-dashboard-nav" aria-label="Разделы кабинета">
+            <nav
+              className="lxst-dashboard-nav"
+              aria-label={mode === "streamer" ? "Разделы панели управления" : "Разделы кабинета"}
+            >
               {mode === "streamer" ? (
                 <>
                   <a href="#overview">Обзор</a>
@@ -181,7 +184,7 @@ export function TwitchDashboardView(props: DashboardProps) {
               <span className="landing-eyebrow-line" />{" "}
               {mode === "streamer" ? "КАБИНЕТ СТРИМЕРА" : "КАБИНЕТ МОДЕРАТОРА"}
             </p>
-            <h1>{mode === "streamer" ? "Управляйте эфиром." : "Ваши каналы."}</h1>
+            <h1>{mode === "streamer" ? "Панель управления" : "Ваши каналы."}</h1>
             <p className="lxst-dashboard-lead">
               {mode === "streamer"
                 ? "Канал, команда и настройки оверлея в одном месте."
@@ -202,7 +205,7 @@ export function TwitchDashboardView(props: DashboardProps) {
           <div className="lxst-dashboard-toolbar">
             <span>
               {mode === "streamer"
-                ? "Панель управления каналом"
+                ? "Панель управления"
                 : "Каналы Twitch, которые вы модерируете"}
             </span>
             <button

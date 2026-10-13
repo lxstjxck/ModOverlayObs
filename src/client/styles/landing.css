@@ -508,6 +508,7 @@
 }
 
 .landing-intro {
+  scroll-margin-top: 20px;
   padding: 130px 0 120px;
   border-top: 1px solid #211f28;
   background: linear-gradient(180deg, #111016, #0d0d11);
@@ -559,6 +560,7 @@
   line-height: 1.75;
 }
 .landing-features {
+  scroll-margin-top: 20px;
   padding-block: 130px;
 }
 .landing-feature-grid {

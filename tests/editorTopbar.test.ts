@@ -75,7 +75,7 @@ describe("editor topbar", () => {
 
   it("uses the owner dashboard or OBS setup route where appropriate", () => {
     expect(renderHeader({ role: "OWNER" })).toContain('href="/streamer"');
-    expect(renderHeader({ role: "OWNER" })).toContain("Панель канала");
+    expect(renderHeader({ role: "OWNER" })).toContain("Панель управления");
     expect(renderHeader({ path: "/app" })).toContain('href="/obs-setup"');
   });
 

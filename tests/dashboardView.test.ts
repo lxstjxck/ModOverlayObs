@@ -71,6 +71,9 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
 describe("Twitch dashboard presentation", () => {
   it("hides the OBS URL by default while keeping copy controls and real editor route", () => {
     const html = render();
+    expect(html).toContain("<h1>Панель управления</h1>");
+    expect(html).toContain('href="#overview"');
+    expect(html).toContain('id="overview"');
     expect(html).toContain('type="password"');
     expect(html).toContain('aria-label="Копировать URL"');
     expect(html).toContain('href="/channel/channel-1"');
@@ -79,6 +82,7 @@ describe("Twitch dashboard presentation", () => {
 
   it("does not offer the editor when moderator access is denied", () => {
     const html = render({ mode: "moderator", channels: [{ ...channel, status: "denied" }] });
+    expect(html).toContain("<h1>Ваши каналы.</h1>");
     expect(html).toContain("Доступ к редактору отозван");
     expect(html).not.toContain('href="/channel/channel-1"');
   });

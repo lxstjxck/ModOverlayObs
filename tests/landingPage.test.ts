@@ -15,6 +15,8 @@ function renderLanding(search = "") {
 describe("public landing page", () => {
   it("routes public calls to action through the Twitch login screen", () => {
     const html = renderLanding();
+    expect(html).toContain('href="#how-it-works"');
+    expect(html).toContain('href="#features"');
     expect(html).toContain('href="/login"');
     expect(html).toContain("Войти через Twitch");
     expect(html).toContain("LXST Overlay");

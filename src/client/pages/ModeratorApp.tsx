@@ -64,7 +64,7 @@ export function EditorTopbar({
 }) {
   const channelEditor = path.startsWith("/channel/");
   const backLink = channelEditor ? (role === "OWNER" ? "/streamer" : "/channels") : "/obs-setup";
-  const backLabel = channelEditor ? (role === "OWNER" ? "Панель канала" : "Мои каналы") : "OBS Setup";
+  const backLabel = channelEditor ? (role === "OWNER" ? "Панель управления" : "Мои каналы") : "OBS Setup";
   const twitchLogin = streamer.twitchLogin?.trim() || null;
 
   return (
