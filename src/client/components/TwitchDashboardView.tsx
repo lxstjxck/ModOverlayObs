@@ -19,6 +19,8 @@ type DashboardProps = {
   mode: TwitchMode;
   me: TwitchProfileView | null;
   channels: TwitchChannelView[];
+  selectedId: string | null;
+  onSelectChannel: (id: string) => void;
   moderators: TwitchModeratorView[];
   obs: ObsSetupView | null;
   canvas: StreamerView | null;
@@ -81,6 +83,8 @@ export function TwitchDashboardView(props: DashboardProps) {
     mode,
     me,
     channels,
+    selectedId,
+    onSelectChannel,
     moderators,
     obs,
     canvas,
@@ -126,9 +130,9 @@ export function TwitchDashboardView(props: DashboardProps) {
   }, [obs?.overlayUrl]);
   const ownChannel =
     mode === "streamer"
-      ? channels.find((channel) => channel.status === "connected" && channel.id)
+      ? channels.find((channel) => channel.twitchId === selectedId && channel.status === "connected" && channel.id)
       : null;
-  const streamerChannel = mode === "streamer" ? channels[0] : null;
+  const streamerChannel = mode === "streamer" ? channels.find((channel) => channel.twitchId === selectedId) : null;
   const filteredModerators = moderators.filter((item) =>
     item.displayName.toLocaleLowerCase().includes(query.toLocaleLowerCase())
   );
@@ -205,6 +209,16 @@ export function TwitchDashboardView(props: DashboardProps) {
         </div>
         {me && (
           <div className="lxst-dashboard-toolbar">
+            <label className="lxst-field">
+              Канал
+              <select value={selectedId ?? ""} onChange={(event) => onSelectChannel(event.target.value)}>
+                {channels.map((channel) => (
+                  <option key={channel.twitchId} value={channel.twitchId}>
+                    {channel.displayName} ({channel.role === "owner" ? "владелец" : "модератор"})
+                  </option>
+                ))}
+              </select>
+            </label>
             <span>
               {mode === "streamer"
                 ? "Панель управления"

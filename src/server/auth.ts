@@ -7,7 +7,7 @@ import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
 import { hasPermission, parsePermissions } from "./permissions";
-import { canAccessChannel } from "./channelAccess";
+import { canAccessChannel, channelRole } from "./channelAccess";
 import { getDefaultStreamer } from "./state";
 
 export const sessionCookieName = "mod_overlay_session";
@@ -48,7 +48,7 @@ export function toUserView(user: {
 export async function createSession(
   userId: string,
   response: Response,
-  twitchMode?: "streamer" | "moderator"
+  twitchMode?: "unified"
 ): Promise<string> {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + sessionDays * 24 * 60 * 60 * 1000);
@@ -142,14 +142,15 @@ export async function requireEditorAuth(request: Request, response: Response, ne
   const channel = session.authMethod === "TWITCH" && typeof requested === "string"
     ? await prisma.streamer.findUnique({ where: { id: requested } })
     : await getDefaultStreamer();
+  const role = channel ? await channelRole(session, channel.id) : null;
   if (!channel || (session.authMethod === "TWITCH" && requested !== channel.id) ||
-      (requested && requested !== channel.id) || !(await canAccessChannel(session, channel.id))) {
+      (requested && requested !== channel.id) || !role) {
     response.status(403).json({ error: "Channel access denied" }); return;
   }
   const authorized = request as AuthenticatedRequest;
   authorized.channel = channel;
   authorized.user = session.authMethod === "TWITCH"
-    ? { ...session.user, role: session.twitchMode === "streamer" ? "OWNER" : "MODERATOR" }
+    ? { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" }
     : session.user;
   next();
 }
@@ -160,8 +161,16 @@ export async function requireTwitchAuth(
   next: NextFunction
 ): Promise<void> {
   const session = await getSessionFromCookieHeader(request.headers.cookie);
-  if (session?.authMethod !== "TWITCH" || !session.user.twitchUserId) {
+  if (session?.authMethod !== "TWITCH" || session.twitchMode !== "unified" || !session.user.twitchUserId) {
     response.status(401).json({ error: "Twitch authentication required" });
+    return;
+  }
+  const connection = await prisma.twitchOAuthConnection.findUnique({
+    where: { userId_mode: { userId: session.user.id, mode: "unified" } },
+    select: { revokedAt: true }
+  });
+  if (!connection || connection.revokedAt) {
+    response.status(401).json({ error: "Twitch authorization expired. Sign in again." });
     return;
   }
   next();

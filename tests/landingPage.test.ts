@@ -131,12 +131,11 @@ describe("public landing page", () => {
     expect(html).toContain('id="how-title"');
   });
 
-  it("keeps both OAuth role routes, legacy login and accessible errors", () => {
+  it("keeps unified OAuth login, legacy login and accessible errors", () => {
     vi.stubGlobal("React", React);
     vi.stubGlobal("window", { location: { search: "?oauth_error=denied" } });
     const html = renderToStaticMarkup(React.createElement(TwitchLoginPage));
-    expect(html).toContain('href="/api/auth/twitch/start/streamer"');
-    expect(html).toContain('href="/api/auth/twitch/start/moderator"');
+    expect(html).toContain('href="/api/auth/twitch/start/unified"');
     expect(html).toContain('href="/legacy-login"');
     expect(html).toContain('role="alert"');
     expect(html).toContain("Вход через Twitch отменён.");

@@ -485,7 +485,7 @@ export function createAppRouter(): express.Router {
     if (!channelId || channelId !== channel.id) {
       response.status(403).json({ error: "Channel access denied" }); return;
     }
-    if (!session || session.authMethod !== "TWITCH" || session.twitchMode !== "streamer" ||
+    if (!session || session.authMethod !== "TWITCH" || session.twitchMode !== "unified" ||
         channel.ownerUserId !== session.user.id || !session.user.twitchUserId) {
       response.status(403).json({ error: "Verified Twitch owner required" }); return;
     }
@@ -550,7 +550,7 @@ function isChannelOwner(
   if (!session) return false;
   return session.authMethod === "LEGACY"
     ? session.user.role === "OWNER"
-    : session.twitchMode === "streamer" && channel.ownerUserId === session.user.id;
+    : session.twitchMode === "unified" && channel.ownerUserId === session.user.id && channel.twitchBroadcasterId === session.user.twitchUserId;
 }
 
 class UploadQuotaError extends Error {

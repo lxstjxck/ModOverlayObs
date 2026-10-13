@@ -8,7 +8,6 @@ import type {
   CanvasChangeMode,
   StreamerView,
   TwitchChannelView,
-  TwitchMode,
   TwitchModeratorView,
   TwitchProfileView
 } from "../../shared/types";
@@ -19,7 +18,7 @@ import { LandingEditorDemo } from "../components/LandingEditorDemo";
 import { TwitchDashboardView } from "../components/TwitchDashboardView";
 import { ActionLink, FeatureCard, SectionHeading } from "../components/ui/LandingUi";
 
-type TwitchMe = { user: TwitchProfileView; mode: TwitchMode; csrfToken: string };
+type TwitchMe = { user: TwitchProfileView; csrfToken: string };
 export function TwitchLandingPage() {
   return (
     <main className="landing-page overlay-landing">
@@ -157,9 +156,12 @@ export function TwitchLandingPage() {
   );
 }
 
-export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
+export function TwitchDashboardPage() {
   const [me, setMe] = useState<TwitchMe | null>(null);
   const [channels, setChannels] = useState<TwitchChannelView[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(new URLSearchParams(window.location.search).get("channelId"));
+  const selectedChannel = channels.find((channel) => channel.twitchId === selectedId);
+  const mode = selectedChannel?.role === "owner" ? "streamer" : "moderator";
   const [moderators, setModerators] = useState<TwitchModeratorView[]>([]);
   const [obs, setObs] = useState<ObsSetupView | null>(null);
   const [canvas, setCanvas] = useState<StreamerView | null>(null);
@@ -181,7 +183,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   const [reloadMessage, setReloadMessage] = useState("");
   const [reloadStarting, setReloadStarting] = useState(false);
 
-  async function load(currentMode: TwitchMode) {
+  async function load(selection = selectedId) {
     setLoading(true);
     setError("");
     setChannels([]);
@@ -194,8 +196,11 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     try {
       const result = await api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels");
       setChannels(result.channels);
-      const own = result.channels.find((channel) => channel.status === "connected" && channel.id);
-      if (currentMode === "streamer" && own?.id) {
+      const selected = result.channels.find((channel) => channel.twitchId === selection) ??
+        result.channels.find((channel) => channel.role === "owner") ?? result.channels[0];
+      setSelectedId(selected?.twitchId ?? null);
+      const own = selected?.role === "owner" && selected.status === "connected" ? selected : null;
+      if (own?.id) {
         const id = own.id;
         setObs(await api<ObsSetupView>("/api/obs", { headers: { "X-Channel-Id": id } }));
         const current = await api<{ streamer: StreamerView }>("/api/auth/me", { headers: { "X-Channel-Id": id } });
@@ -226,34 +231,38 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
   useEffect(() => {
     void api<TwitchMe>("/api/auth/twitch/me")
       .then((value) => {
-        if (value.mode !== mode)
-          window.location.replace(value.mode === "streamer" ? "/streamer" : "/channels");
-        else {
-          setMe(value);
-          void load(mode);
-        }
+        setMe(value);
+        void load();
       })
       .catch(() => window.location.replace("/login"));
-  }, [mode]);
+  }, []);
 
   const ownChannel =
     mode === "streamer"
-      ? channels.find((channel) => channel.status === "connected" && channel.id)
+      ? selectedChannel?.status === "connected" && selectedChannel.id ? selectedChannel : null
       : null;
   useEffect(() => {
-    if (mode !== "moderator" || !me) return;
+    if (!me) return;
     let mounted = true;
     const refresh = () => {
       if (document.visibilityState === "hidden") return;
       void api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels")
-        .then((result) => { if (mounted) { setChannels(result.channels); setError(""); } })
+        .then((result) => {
+          if (!mounted) return;
+          setChannels(result.channels);
+          setSelectedId((current) => result.channels.some((channel) => channel.twitchId === current)
+            ? current : result.channels[0]?.twitchId ?? null);
+          setError("");
+        })
         .catch((refreshError: unknown) => {
           if (!mounted) return;
           if (refreshError instanceof ApiError && refreshError.status === 401) {
             window.location.replace("/login");
             return;
           }
-          if (refreshError instanceof ApiError && refreshError.status === 403) setChannels([]);
+          setChannels([]);
+          setObs(null);
+          setCanvas(null);
           setError(refreshError instanceof Error ? refreshError.message : "Не удалось обновить список каналов");
         });
     };
@@ -266,7 +275,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [mode, me?.user.id]);
+  }, [me?.user.id]);
   useEffect(() => {
     if (!ownChannel?.id) return;
     setSourceWidth(window.localStorage.getItem(`obs-width:${ownChannel.id}`) ?? "");
@@ -421,7 +430,7 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     setError("");
     try {
       await api("/api/auth/twitch/channels", { method: "POST" });
-      await load("streamer");
+      await load(selectedId);
     } catch (connectError) {
       setError(connectError instanceof Error ? connectError.message : "Не удалось подключить канал");
     } finally {
@@ -438,7 +447,12 @@ export function TwitchDashboardPage({ mode }: { mode: TwitchMode }) {
     ttsCost={ttsCost} ratio={ratio} changed={Boolean(changed)} dimensionsValid={dimensionsValid}
     loading={loading} connecting={connecting} savingCanvas={savingCanvas} ttsBusy={ttsBusy}
     changingModerator={changingModerator} error={error}
-    onRefresh={() => void load(mode)} onLogout={() => void logout()}
+    selectedId={selectedId} onSelectChannel={(id) => {
+      setSelectedId(id);
+      window.history.replaceState(null, "", `/channels?channelId=${encodeURIComponent(id)}`);
+      void load(id);
+    }}
+    onRefresh={() => void load()} onLogout={() => void logout()}
     onConnectChannel={() => void connectChannel()} onToggleModerator={(item) => void toggle(item)}
     onToggleTts={() => void toggleTts()} onSaveTtsReward={() => void saveTtsReward()}
     onSaveCanvas={(changeMode) => void saveCanvas(changeMode)}

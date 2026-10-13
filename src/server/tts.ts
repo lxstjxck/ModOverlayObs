@@ -9,6 +9,7 @@ import type { Server } from "socket.io";
 import { z } from "zod";
 import type { TtsSetupView } from "../shared/types";
 import { getSessionFromCookieHeader, hashSessionToken, readSessionToken, requireAuth, type AuthenticatedRequest } from "./auth";
+import { channelRole } from "./channelAccess";
 import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import { getDefaultStreamer, writeAudit } from "./state";
@@ -225,13 +226,13 @@ function ownerOnly(request: Request, response: Response, next: () => void): void
 
 async function twitchOwnerChannel(request: Request, response: Response) {
   const session = await getSessionFromCookieHeader(request.headers.cookie);
-  if (session?.authMethod !== "TWITCH" || session.twitchMode !== "streamer" || !session.user.twitchUserId) {
+  if (session?.authMethod !== "TWITCH" || session.twitchMode !== "unified" || !session.user.twitchUserId) {
     response.status(403).json({ error: "Streamer Twitch session required" });
     return null;
   }
   const channel = typeof request.params.channelId === "string"
     ? await prisma.streamer.findUnique({ where: { id: request.params.channelId } }) : null;
-  if (!channel || channel.ownerUserId !== session.userId || channel.twitchBroadcasterId !== session.user.twitchUserId) {
+  if (!channel || channel.ownerUserId !== session.userId || channel.twitchBroadcasterId !== session.user.twitchUserId || await channelRole(session, channel.id) !== "owner") {
     response.status(404).json({ error: "Channel not found" });
     return null;
   }
@@ -360,8 +361,9 @@ export function ttsRouter(): express.Router {
     if (!binding || crypto.createHash("sha256").update(binding).digest("hex") !== grant.bindingHash ||
         grant.expiresAt <= new Date() || grant.redirectUri !== callbackUrl() || !token ||
         grant.legacySessionHash !== hashSessionToken(token) ||
-        session?.authMethod !== "TWITCH" || session.twitchMode !== "streamer" ||
+        session?.authMethod !== "TWITCH" || session.twitchMode !== "unified" ||
         !channel || channel.ownerUserId !== session.userId || channel.twitchBroadcasterId !== session.user.twitchUserId ||
+        await channelRole(session, channelId) !== "owner" ||
         (await prisma.twitchOAuthState.deleteMany({ where: { stateHash, bindingHash: grant.bindingHash, expiresAt: { gt: new Date() } } })).count !== 1 ||
         typeof request.query.code !== "string") {
       response.status(400).send("Invalid Twitch TTS authorization state");

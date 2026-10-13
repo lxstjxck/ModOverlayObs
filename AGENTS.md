@@ -8,7 +8,7 @@ ModOverlayObs is a self-hosted moderator overlay for OBS Browser Source.
 A moderator prepares and controls text, images, GIFs, video, audio, and external media.
 OBS renders the live result through a browser source. The logical canvas is 1920x1080.
 
-The project is designed for one streamer and a trusted moderator team.
+The project supports multiple connected Twitch channels and trusted moderator teams.
 
 ## Stack
 
@@ -42,12 +42,13 @@ The project is designed for one streamer and a trusted moderator team.
 4. Client and OBS views must converge on the same server-authoritative state.
 5. Socket.IO changes must handle reconnects, stale clients, authorization changes, logout, and overlay-token rotation.
 6. The server is the authority for permissions. UI restrictions are not security boundaries.
-7. Never expose secrets, session data, passwords, or overlay tokens in logs, URLs, client-visible state, or committed files.
-8. Never append the internal overlay token to external media URLs.
-9. Protected uploaded media must continue to support the access patterns required by media playback, including HEAD/Range requests.
-10. Do not weaken upload validation, quota handling, cleanup, or authorization checks to simplify a feature.
-11. Do not trust `X-Forwarded-For` unless proxy behavior is deliberately redesigned and tested.
-12. Preserve existing data unless a task explicitly requires a destructive migration.
+7. A Twitch session identifies a user; owner/moderator access is determined separately for each channel on the server.
+8. Never expose secrets, session data, passwords, or overlay tokens in logs, URLs, client-visible state, or committed files.
+9. Never append the internal overlay token to external media URLs.
+10. Protected uploaded media must continue to support the access patterns required by media playback, including HEAD/Range requests.
+11. Do not weaken upload validation, quota handling, cleanup, or authorization checks to simplify a feature.
+12. Do not trust `X-Forwarded-For` unless proxy behavior is deliberately redesigned and tested.
+13. Preserve existing data unless a task explicitly requires a destructive migration.
 
 ## Architecture rules
 

@@ -20,7 +20,7 @@ export function App() {
     return <LoginPage />;
   }
   if (path === "/streamer" || path === "/channels") {
-    return <TwitchDashboardPage mode={path === "/streamer" ? "streamer" : "moderator"} />;
+    return <TwitchDashboardPage />;
   }
   if (path === "/obs-setup") {
     return <ObsSetupPage />;

@@ -16,7 +16,7 @@ import {
   hashSessionToken
 } from "./auth";
 import { accessRevocation } from "./accessRevocation";
-import { canAccessChannel } from "./channelAccess";
+import { channelRole } from "./channelAccess";
 import { withCanvasLock } from "./canvasSettings";
 import { config } from "./config";
 import { prisma } from "./db";
@@ -191,8 +191,9 @@ export function configureSocket(httpServer: HttpServer): Server {
       const streamer = session.authMethod === "TWITCH" && requestedChannel
         ? await prisma.streamer.findUnique({ where: { id: requestedChannel } })
         : await getDefaultStreamer();
+      const role = streamer ? await channelRole(session, streamer.id) : null;
       if (!streamer || (session.authMethod === "TWITCH" && requestedChannel !== streamer.id) ||
-          (requestedChannel && requestedChannel !== streamer.id) || !(await canAccessChannel(session, streamer.id))) {
+          (requestedChannel && requestedChannel !== streamer.id) || !role) {
         finish(new Error("Channel access denied"));
         return;
       }
@@ -200,7 +201,7 @@ export function configureSocket(httpServer: HttpServer): Server {
         finish(new Error("Session expired"));
         return;
       }
-      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.authMethod === "TWITCH" ? { ...session.user, role: session.twitchMode === "streamer" ? "OWNER" : "MODERATOR" } : session.user });
+      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.authMethod === "TWITCH" ? { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" } : session.user });
       expiryTimer = setTimeout(revoke, Math.max(0, session.expiresAt.getTime() - Date.now()));
       expiryTimer.unref();
       finish();
@@ -501,10 +502,11 @@ async function guarded(
       return false;
     }
     const currentSession = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
-    const currentUser = currentSession ? (currentSession.authMethod === "TWITCH" ? { ...currentSession.user, role: currentSession.twitchMode === "streamer" ? "OWNER" as const : "MODERATOR" as const } : currentSession.user) : null;
     const context = contexts.get(socket);
+    const role = currentSession && context?.kind === "moderator" ? await channelRole(currentSession, context.streamerId) : null;
+    const currentUser = currentSession ? (currentSession.authMethod === "TWITCH" ? { ...currentSession.user, role: role === "owner" ? "OWNER" as const : "MODERATOR" as const, permissionsJson: "{}" } : currentSession.user) : null;
     if (!socket.connected || !currentUser || currentUser.id !== user.id ||
-      context?.kind !== "moderator" || !currentSession || !(await canAccessChannel(currentSession, context.streamerId))) {
+      context?.kind !== "moderator" || !currentSession || !role) {
       socket.emit("access:revoked");
       socket.disconnect(true);
       return false;

@@ -12,7 +12,8 @@ const channel = {
   twitchId: "twitch-1",
   displayName: "Creator",
   avatarUrl: null,
-  status: "connected" as const
+  status: "connected" as const,
+  role: "owner" as const
 };
 
 function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> = {}) {
@@ -22,6 +23,8 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     mode: "streamer",
     me: profile,
     channels: [channel],
+    selectedId: channel.twitchId,
+    onSelectChannel: () => {},
     moderators: [],
     obs: {
       overlayUrl: "https://example.invalid/overlay/private-value",

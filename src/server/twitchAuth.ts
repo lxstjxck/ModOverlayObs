@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import express from "express";
 import { parse } from "cookie";
-import type { ChannelStatus, TwitchChannelView, TwitchMode, TwitchModeratorView } from "../shared/types";
+import type { ChannelStatus, TwitchChannelView, TwitchModeratorView } from "../shared/types";
 import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import {
@@ -14,18 +14,14 @@ import {
   requireTwitchAuth
 } from "./auth";
 import { clientIp, createRateLimitMiddleware } from "./security";
-import { canAccessChannel, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators, verifyStreamerIdentity } from "./channelAccess";
+import { canAccessChannel, channelRole, encryptOAuthToken, getModeratedChannels, getTwitchProfiles, setModeratorBan, syncModerators, verifyStreamerIdentity } from "./channelAccess";
 import { getDefaultStreamer } from "./state";
 import { overlayReload } from "./overlayReload";
 import { requestOverlayReload } from "./socket";
 
 const stateCookie = "mod_overlay_twitch_state";
 const stateTtlMs = 10 * 60_000;
-const scopes: Record<TwitchMode, string> = {
-  streamer: "moderation:read",
-  moderator: "user:read:moderated_channels"
-};
-const target: Record<TwitchMode, string> = { streamer: "/streamer", moderator: "/channels" };
+const scopes = ["moderation:read", "user:read:moderated_channels"];
 const startLimit = createRateLimitMiddleware({
   max: 20,
   windowMs: 60_000,
@@ -73,7 +69,7 @@ export function twitchAuthRouter(): express.Router {
 
   router.get("/start/:mode", startLimit, async (request, response) => {
     const mode = request.params.mode;
-    if (mode !== "streamer" && mode !== "moderator" && mode !== "bind") {
+    if (mode !== "unified" && mode !== "bind") {
       response.status(404).json({ error: "Unknown login mode" });
       return;
     }
@@ -118,7 +114,7 @@ export function twitchAuthRouter(): express.Router {
     authorize.searchParams.set("response_type", "code");
     authorize.searchParams.set("client_id", config.twitchClientId);
     authorize.searchParams.set("redirect_uri", config.twitchOAuthRedirectUri);
-    authorize.searchParams.set("scope", scopes[mode === "bind" ? "streamer" : mode]);
+    authorize.searchParams.set("scope", scopes.join(" "));
     authorize.searchParams.set("state", state);
     response.setHeader("Cache-Control", "no-store");
     response.redirect(authorize.toString());
@@ -172,13 +168,13 @@ export function twitchAuthRouter(): express.Router {
     if (
       typeof request.query.code !== "string" ||
       !request.query.code ||
-      (grant.mode !== "streamer" && grant.mode !== "moderator" && grant.mode !== "bind")
+      (grant.mode !== "unified" && grant.mode !== "bind")
     ) {
       fail(response, "invalid_response");
       return;
     }
     try {
-      const mode: TwitchMode = grant.mode === "bind" ? "streamer" : grant.mode as TwitchMode;
+      const mode = "unified";
       const body = new URLSearchParams({
         client_id: config.twitchClientId,
         client_secret: config.twitchClientSecret,
@@ -196,20 +192,25 @@ export function twitchAuthRouter(): express.Router {
         !tokens.access_token ||
         !tokens.refresh_token ||
         !Number.isFinite(tokens.expires_in) ||
-        tokens.expires_in <= 0
+        tokens.expires_in <= 0 ||
+        !Array.isArray(tokens.scope)
       )
         throw new Error("Invalid token response");
+      if (!scopes.every((scope) => tokens.scope.includes(scope))) {
+        fail(response, "insufficient_scope");
+        return;
+      }
       const validated = await twitchJson<{ client_id: string; user_id: string; scopes: string[] }>(
         "https://id.twitch.tv/oauth2/validate",
         { headers: { Authorization: `OAuth ${tokens.access_token}` } }
       );
-      if (
-        validated.client_id !== config.twitchClientId ||
-        !/^\d+$/.test(validated.user_id) ||
-        !Array.isArray(validated.scopes) ||
-        !validated.scopes.includes(scopes[mode])
-      )
+      if (validated.client_id !== config.twitchClientId || !/^\d+$/.test(validated.user_id) ||
+          !Array.isArray(validated.scopes))
         throw new Error("Invalid token identity or scopes");
+      if (!scopes.every((scope) => validated.scopes.includes(scope))) {
+        fail(response, "insufficient_scope");
+        return;
+      }
       const users = await twitchJson<{
         data: Array<{ id: string; login: string; display_name: string; profile_image_url: string }>;
       }>("https://api.twitch.tv/helix/users", {
@@ -280,12 +281,14 @@ export function twitchAuthRouter(): express.Router {
         return account;
       });
       if (channel) {
-        response.redirect(303, "/streamer?oauth_bound=1");
+        await destroySession(request, response);
+        await createSession(user.id, response, mode);
+        response.redirect(303, "/channels?oauth_bound=1");
         return;
       }
       if (existing) await destroySession(request, response);
       await createSession(user.id, response, mode);
-      response.redirect(303, target[mode]);
+      response.redirect(303, "/channels");
     } catch {
       fail(response, "twitch_unavailable");
     }
@@ -301,15 +304,14 @@ export function twitchAuthRouter(): express.Router {
         displayName: session!.user.displayName,
         avatarUrl: session!.user.twitchAvatarUrl
       },
-      mode: session!.twitchMode,
       csrfToken: getCsrfTokenFromRequest(request)
     });
   });
 
   router.post("/channels", requireTwitchAuth, async (request, response) => {
     const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
-    if (session.twitchMode !== "streamer") {
-      response.status(403).json({ error: "Verified streamer session required" });
+    if (session.twitchMode !== "unified") {
+      response.status(403).json({ error: "Unified Twitch session required" });
       return;
     }
     try {
@@ -356,22 +358,10 @@ export function twitchAuthRouter(): express.Router {
   router.get("/channels", requireTwitchAuth, async (request, response) => {
     const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
     try {
-      let channels = new Set([session.user.twitchUserId!]);
-      if (session.twitchMode === "moderator") {
-        try { channels = await getModeratedChannels(session.user.id); }
-        catch {
-          const snapshots = await prisma.channelModeratorSnapshot.findMany({
-            where: { checkedAt: { gt: new Date(Date.now() - 15 * 60_000) } },
-            include: { channel: { select: { twitchBroadcasterId: true } } }
-          });
-          channels = new Set(snapshots.filter((snapshot) => {
-            try { return (JSON.parse(snapshot.userIdsJson) as string[]).includes(session.user.twitchUserId!); }
-            catch { return false; }
-          }).map((snapshot) => snapshot.channel.twitchBroadcasterId).filter((id): id is string => Boolean(id)));
-          if (channels.size === 0) throw new Error("Twitch access verification unavailable");
-        }
-      }
-      const profiles = await getTwitchProfiles(session.user.id, session.twitchMode as TwitchMode, [...channels]).catch(() => []);
+      if (!(await verifyStreamerIdentity(session.user.id, session.user.twitchUserId!))) throw new Error("Twitch identity revoked");
+      const channels = await getModeratedChannels(session.user.id);
+      channels.add(session.user.twitchUserId!);
+      const profiles = await getTwitchProfiles(session.user.id, [...channels]).catch(() => []);
       const linked = await prisma.streamer.findMany({
         where: { twitchBroadcasterId: { in: [...channels] }, ownerUserId: { not: null } },
         select: { id: true, displayName: true, twitchLogin: true, twitchBroadcasterId: true, ownerUserId: true }
@@ -382,13 +372,14 @@ export function twitchAuthRouter(): express.Router {
         const profile = profiles.find((item) => item.id === id);
         let status: ChannelStatus = "unconnected";
         if (channel) {
-          if (session.twitchMode === "moderator" && await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId: channel.id, userId: session.user.id } } })) status = "denied";
+          if (channel.ownerUserId !== session.user.id && await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId: channel.id, userId: session.user.id } } })) status = "denied";
           else {
             try { status = await canAccessChannel(session, channel.id) ? "connected" : "error"; }
             catch { status = "error"; }
           }
         }
-        result.push({ id: channel?.id ?? null, twitchId: id, displayName: profile?.displayName ?? channel?.displayName ?? id, avatarUrl: profile?.avatarUrl ?? null, status });
+        result.push({ id: channel?.id ?? null, twitchId: id, displayName: profile?.displayName ?? channel?.displayName ?? id, avatarUrl: profile?.avatarUrl ?? null, status,
+          role: id === session.user.twitchUserId && (!channel || channel.ownerUserId === session.user.id) ? "owner" : "moderator" });
       }
       response.setHeader("Cache-Control", "no-store");
       response.json({ channels: result });
@@ -399,10 +390,10 @@ export function twitchAuthRouter(): express.Router {
 
   async function ownsChannel(request: express.Request): Promise<boolean> {
     const session = await getSessionFromCookieHeader(request.headers.cookie);
-    if (!session || session.twitchMode !== "streamer") return false;
+    if (!session || session.twitchMode !== "unified") return false;
     const channelId = String(request.params.channelId);
     const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true } });
-    return channel?.ownerUserId === session.user.id && await canAccessChannel(session, channelId);
+    return channel?.ownerUserId === session.user.id && await channelRole(session, channelId) === "owner";
   }
 
   router.post("/channels/:channelId/overlay-reload", requireTwitchAuth, async (request, response) => {
@@ -438,13 +429,13 @@ export function twitchAuthRouter(): express.Router {
     const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
     const channelId = String(request.params.channelId);
     const channel = await prisma.streamer.findUnique({ where: { id: channelId } });
-    if (!channel || channel.ownerUserId !== session.user.id || session.twitchMode !== "streamer" || !(await canAccessChannel(session, channelId))) {
+    if (!channel || channel.ownerUserId !== session.user.id || session.twitchMode !== "unified" || await channelRole(session, channelId) !== "owner") {
       response.status(403).json({ error: "Permission denied" });
       return;
     }
     try {
       const ids = await syncModerators(channelId);
-      const profiles = await getTwitchProfiles(session.user.id, "streamer", [...ids]);
+      const profiles = await getTwitchProfiles(session.user.id, [...ids]);
       for (const profile of profiles) await prisma.user.upsert({
         where: { twitchUserId: profile.id },
         create: { username: `twitch:${profile.id}`, twitchUserId: profile.id, displayName: profile.displayName, twitchLogin: profile.login, twitchAvatarUrl: profile.avatarUrl, passwordHash: "!twitch-oauth-only" },
@@ -465,7 +456,7 @@ export function twitchAuthRouter(): express.Router {
   for (const method of ["put", "delete"] as const) router[method]("/channels/:channelId/bans/:userId", requireTwitchAuth, async (request, response) => {
     const session = (await getSessionFromCookieHeader(request.headers.cookie))!;
     const channelId = String(request.params.channelId);
-    if (session.twitchMode !== "streamer" || !(await canAccessChannel(session, channelId))) { response.status(403).json({ error: "Permission denied" }); return; }
+    if (session.twitchMode !== "unified" || await channelRole(session, channelId) !== "owner") { response.status(403).json({ error: "Permission denied" }); return; }
     try {
       await setModeratorBan(channelId, session.user.id, String(request.params.userId), method === "put");
       response.json({ ok: true });

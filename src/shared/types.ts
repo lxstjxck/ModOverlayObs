@@ -42,6 +42,7 @@ export interface TwitchChannelView {
   displayName: string;
   avatarUrl: string | null;
   status: ChannelStatus;
+  role: "owner" | "moderator";
 }
 
 export interface TwitchModeratorView {

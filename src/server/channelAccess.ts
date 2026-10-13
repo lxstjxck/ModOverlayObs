@@ -4,15 +4,20 @@ import { config } from "./config";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
 
-const freshMs = 5 * 60_000;
-const maxStaleMs = 15 * 60_000;
+const freshMs = 10_000;
+const requiredScopes = ["moderation:read", "user:read:moderated_channels"];
 const refreshes = new Map<string, Promise<string>>();
 const syncs = new Map<string, Promise<Set<string>>>();
+const verified = new Map<string, { twitchId: string; at: number }>();
+const identityChecks = new Map<string, Promise<boolean>>();
+const revocationVersion = new Map<string, number>();
 
-async function revokeConnection(userId: string, mode: "streamer" | "moderator"): Promise<void> {
+async function revokeConnection(userId: string, mode: "streamer" | "moderator" | "unified"): Promise<void> {
+  verified.delete(userId);
+  revocationVersion.set(userId, (revocationVersion.get(userId) ?? 0) + 1);
   await prisma.twitchOAuthConnection.updateMany({ where: { userId, mode }, data: { revokedAt: new Date() } });
   accessRevocation.emit("user", userId);
-  if (mode === "streamer") {
+  if (mode === "streamer" || mode === "unified") {
     const channels = await prisma.streamer.findMany({ where: { ownerUserId: userId }, select: { id: true } });
     for (const channel of channels) accessRevocation.emit("channel", channel.id);
   }
@@ -33,7 +38,7 @@ function decryptOAuthToken(value: string): string {
   return Buffer.concat([decipher.update(parts[2]), decipher.final()]).toString("utf8");
 }
 
-async function accessToken(userId: string, mode: "streamer" | "moderator", force = false): Promise<string> {
+async function accessToken(userId: string, mode: "streamer" | "moderator" | "unified", force = false): Promise<string> {
   const connection = await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId, mode } } });
   if (!connection || connection.revokedAt) throw new Error("Twitch connection unavailable");
   if (!force && connection.expiresAt.getTime() > Date.now() + 30_000) return decryptOAuthToken(connection.encryptedAccess);
@@ -59,8 +64,8 @@ async function accessToken(userId: string, mode: "streamer" | "moderator", force
     }
     const tokens = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string[] };
     if (!tokens.access_token || !tokens.refresh_token || !tokens.expires_in || !Array.isArray(tokens.scope)) throw new Error("Invalid Twitch refresh");
-    const required = mode === "streamer" ? "moderation:read" : "user:read:moderated_channels";
-    if (!tokens.scope.includes(required)) {
+    const required = mode === "unified" ? requiredScopes : [mode === "streamer" ? "moderation:read" : "user:read:moderated_channels"];
+    if (!required.every((scope) => tokens.scope!.includes(scope))) {
       await revokeConnection(userId, mode);
       throw new Error("Twitch scope revoked");
     }
@@ -81,32 +86,49 @@ async function accessToken(userId: string, mode: "streamer" | "moderator", force
 }
 
 export async function verifyStreamerIdentity(userId: string, twitchUserId: string): Promise<boolean> {
-  let token = await accessToken(userId, "streamer");
+  let token = await accessToken(userId, "unified");
   let response = await fetch("https://id.twitch.tv/oauth2/validate", {
     headers: { Authorization: `OAuth ${token}` }, signal: AbortSignal.timeout(8000)
   });
   if (response.status === 401) {
-    token = await accessToken(userId, "streamer", true);
+    token = await accessToken(userId, "unified", true);
     response = await fetch("https://id.twitch.tv/oauth2/validate", {
       headers: { Authorization: `OAuth ${token}` }, signal: AbortSignal.timeout(8000)
     });
   }
   if (response.status === 401 || response.status === 403) {
-    await revokeConnection(userId, "streamer");
+    await revokeConnection(userId, "unified");
     return false;
   }
   if (!response.ok) throw new Error("Twitch identity verification unavailable");
   const identity = await response.json() as { client_id?: string; user_id?: string; scopes?: string[] };
   if (identity.client_id !== config.twitchClientId || identity.user_id !== twitchUserId ||
-      !identity.scopes?.includes("moderation:read")) {
-    await revokeConnection(userId, "streamer");
+      !requiredScopes.every((scope) => identity.scopes?.includes(scope))) {
+    await revokeConnection(userId, "unified");
     return false;
   }
   return true;
 }
 
+async function verifyRecentIdentity(userId: string, twitchUserId: string, force = false): Promise<boolean> {
+  const cached = verified.get(userId);
+  if (!force && cached?.twitchId === twitchUserId && Date.now() - cached.at < freshMs) return true;
+  const pending = identityChecks.get(userId);
+  if (pending) return pending;
+  const version = revocationVersion.get(userId) ?? 0;
+  const operation = verifyStreamerIdentity(userId, twitchUserId).then((valid) => {
+    if (valid && version === (revocationVersion.get(userId) ?? 0)) {
+      verified.set(userId, { twitchId: twitchUserId, at: Date.now() });
+      return true;
+    }
+    return false;
+  });
+  identityChecks.set(userId, operation);
+  try { return await operation; } finally { identityChecks.delete(userId); }
+}
+
 async function twitchPages(userId: string, mode: "streamer" | "moderator", endpoint: string, idKey: string): Promise<Set<string>> {
-  let token = await accessToken(userId, mode);
+  let token = await accessToken(userId, "unified");
   let cursor: string | undefined;
   const seen = new Set<string>();
   const ids = new Set<string>();
@@ -117,11 +139,11 @@ async function twitchPages(userId: string, mode: "streamer" | "moderator", endpo
     if (cursor) url.searchParams.set("after", cursor);
     let response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
     if (response.status === 401) {
-      token = await accessToken(userId, mode, true);
+      token = await accessToken(userId, "unified", true);
       response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
     }
     if (response.status === 401 || response.status === 403) {
-      await revokeConnection(userId, mode);
+      await revokeConnection(userId, "unified");
       throw new Error("Twitch authorization revoked");
     }
     if (!response.ok) throw new Error("Twitch list unavailable");
@@ -145,18 +167,18 @@ export async function getModeratedChannels(userId: string): Promise<Set<string>>
   return twitchPages(userId, "moderator", "moderation/channels", "user_id");
 }
 
-export async function getTwitchProfiles(userId: string, mode: "streamer" | "moderator", ids: string[]): Promise<Array<{ id: string; login: string; displayName: string; avatarUrl: string }>> {
+export async function getTwitchProfiles(userId: string, ids: string[]): Promise<Array<{ id: string; login: string; displayName: string; avatarUrl: string }>> {
   const profiles: Array<{ id: string; login: string; displayName: string; avatarUrl: string }> = [];
   for (let index = 0; index < ids.length; index += 100) {
     const url = new URL("https://api.twitch.tv/helix/users");
     for (const id of ids.slice(index, index + 100)) url.searchParams.append("id", id);
-    let token = await accessToken(userId, mode);
+    let token = await accessToken(userId, "unified");
     let response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
     if (response.status === 401) {
-      token = await accessToken(userId, mode, true);
+      token = await accessToken(userId, "unified", true);
       response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, "Client-Id": config.twitchClientId }, signal: AbortSignal.timeout(8000) });
     }
-    if (response.status === 401 || response.status === 403) { await revokeConnection(userId, mode); throw new Error("Twitch authorization revoked"); }
+    if (response.status === 401 || response.status === 403) { await revokeConnection(userId, "unified"); throw new Error("Twitch authorization revoked"); }
     if (!response.ok) throw new Error("Twitch profiles unavailable");
     const body = await response.json() as { data?: Array<{ id?: string; login?: string; display_name?: string; profile_image_url?: string }> };
     if (!Array.isArray(body.data)) throw new Error("Invalid Twitch profiles");
@@ -189,37 +211,44 @@ export async function syncModerators(channelId: string): Promise<Set<string>> {
   try { return await operation; } finally { syncs.delete(channelId); }
 }
 
-export async function canAccessChannel(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<boolean> {
+async function resolveChannelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<"owner" | "moderator" | null> {
   const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true, twitchBroadcasterId: true } });
-  if (!channel) return false;
+  if (!channel) return null;
   if (session.authMethod === "LEGACY") {
     const first = await prisma.streamer.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
-    return first?.id === channelId;
+    return first?.id === channelId ? session.user.role === "OWNER" ? "owner" : "moderator" : null;
   }
-  if (!session.user.twitchUserId) return false;
+  if (session.twitchMode !== "unified" || !session.user.twitchUserId) return null;
   const connection = await prisma.twitchOAuthConnection.findUnique({
-    where: { userId_mode: { userId: session.user.id, mode: session.twitchMode ?? "" } },
-    select: { revokedAt: true }
+    where: { userId_mode: { userId: session.user.id, mode: "unified" } },
+    select: { revokedAt: true, expiresAt: true }
   });
-  if (!connection || connection.revokedAt) return false;
-  if (channel.ownerUserId === session.user.id && session.twitchMode === "streamer") return true;
-  if (session.twitchMode !== "moderator" || !channel.twitchBroadcasterId) return false;
-  if (!channel.ownerUserId) return false;
-  const ownerConnection = await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId: channel.ownerUserId, mode: "streamer" } }, select: { revokedAt: true } });
-  if (!ownerConnection || ownerConnection.revokedAt) return false;
+  if (!connection || connection.revokedAt || !(await verifyRecentIdentity(session.user.id, session.user.twitchUserId, connection.expiresAt <= new Date()))) return null;
+  if (channel.ownerUserId === session.user.id && channel.twitchBroadcasterId === session.user.twitchUserId) return "owner";
+  if (!channel.twitchBroadcasterId || !channel.ownerUserId) return null;
+  const ownerConnection = await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId: channel.ownerUserId, mode: "unified" } }, select: { revokedAt: true, expiresAt: true } });
+  if (!ownerConnection || ownerConnection.revokedAt) return null;
+  const owner = await prisma.user.findUnique({ where: { id: channel.ownerUserId }, select: { twitchUserId: true } });
+  if (!owner?.twitchUserId || owner.twitchUserId !== channel.twitchBroadcasterId ||
+      !(await verifyRecentIdentity(channel.ownerUserId, owner.twitchUserId, ownerConnection.expiresAt <= new Date()))) return null;
   const ban = await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId, userId: session.user.id } } });
-  if (ban) return false;
+  if (ban) return null;
   let snapshot = await prisma.channelModeratorSnapshot.findUnique({ where: { channelId } });
   if (!snapshot || Date.now() - snapshot.checkedAt.getTime() > freshMs) {
-    try { await syncModerators(channelId); snapshot = await prisma.channelModeratorSnapshot.findUnique({ where: { channelId } }); }
-    catch {
-      const current = await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId: session.user.id, mode: "moderator" } }, select: { revokedAt: true } });
-      const ownerCurrent = await prisma.twitchOAuthConnection.findUnique({ where: { userId_mode: { userId: channel.ownerUserId, mode: "streamer" } }, select: { revokedAt: true } });
-      if (current?.revokedAt || ownerCurrent?.revokedAt || !snapshot || Date.now() - snapshot.checkedAt.getTime() > maxStaleMs) return false;
-    }
+    await syncModerators(channelId);
+    snapshot = await prisma.channelModeratorSnapshot.findUnique({ where: { channelId } });
   }
-  if (!snapshot || Date.now() - snapshot.checkedAt.getTime() > maxStaleMs) return false;
-  return (JSON.parse(snapshot.userIdsJson) as string[]).includes(session.user.twitchUserId);
+  if (!snapshot || Date.now() - snapshot.checkedAt.getTime() > freshMs) return null;
+  return (JSON.parse(snapshot.userIdsJson) as string[]).includes(session.user.twitchUserId) ? "moderator" : null;
+}
+
+export async function channelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<"owner" | "moderator" | null> {
+  try { return await resolveChannelRole(session, channelId); }
+  catch { return null; }
+}
+
+export async function canAccessChannel(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<boolean> {
+  return (await channelRole(session, channelId)) !== null;
 }
 
 export async function setModeratorBan(channelId: string, ownerUserId: string, moderatorUserId: string, banned: boolean): Promise<void> {

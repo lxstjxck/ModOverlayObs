@@ -4,7 +4,8 @@ import { BrandIdentity } from "../components/BrandIdentity";
 
 const oauthErrors: Record<string, string> = {
   invalid_state: "Сессия входа истекла. Попробуйте снова.",
-  denied: "Вход через Twitch отменён. Вы можете выбрать роль и попробовать снова.",
+  denied: "Вход через Twitch отменён. Разрешите доступ и попробуйте снова.",
+  insufficient_scope: "Twitch не выдал все необходимые разрешения. Разрешите оба доступа и попробуйте снова.",
   legacy_session: "Выйдите из старой учётной записи перед входом через Twitch.",
   invalid_response: "Twitch вернул некорректный ответ. Попробуйте снова.",
   twitch_unavailable: "Не удалось завершить вход через Twitch. Попробуйте позже."
@@ -12,7 +13,7 @@ const oauthErrors: Record<string, string> = {
 
 export function TwitchLoginPage() {
   const error = new URLSearchParams(window.location.search).get("oauth_error");
-  const [loadingMode, setLoadingMode] = useState<"streamer" | "moderator" | null>(null);
+  const [loading, setLoading] = useState(false);
 
   return (
     <main className="lxst-auth-page">
@@ -30,7 +31,7 @@ export function TwitchLoginPage() {
           <h1>
             Эфир начинается <em>здесь.</em>
           </h1>
-          <p>Войдите через Twitch и выберите, как будете работать с оверлеем.</p>
+          <p>Войдите через Twitch, чтобы открыть свой канал и каналы, где вы модератор.</p>
           <div className="lxst-auth-aside">
             <ShieldCheck size={20} aria-hidden="true" />
             <span>Доступ к каналам и действиям определяется вашей ролью в Twitch.</span>
@@ -39,14 +40,14 @@ export function TwitchLoginPage() {
         <section
           className="lxst-auth-card"
           aria-labelledby="auth-title"
-          aria-busy={loadingMode !== null}
+          aria-busy={loading}
         >
           <div className="lxst-auth-card-top">
             <Radio size={22} aria-hidden="true" />
             <span>01 / ВХОД</span>
           </div>
           <h2 id="auth-title">Войти через Twitch</h2>
-          <p>Подключите канал как стример или откройте доступные каналы как модератор.</p>
+          <p>Один вход откроет все доступные каналы. Twitch запросит права на проверку вашего канала и модерации.</p>
           {error && (
             <div className="lxst-alert" role="alert">
               {oauthErrors[error] ?? "Ошибка авторизации. Попробуйте снова."}
@@ -54,23 +55,11 @@ export function TwitchLoginPage() {
           )}
           <a
             className="lxst-button lxst-button-primary"
-            href="/api/auth/twitch/start/streamer"
-            onClick={() => setLoadingMode("streamer")}
+            href="/api/auth/twitch/start/unified"
+            onClick={() => setLoading(true)}
           >
             <span>
-              {loadingMode === "streamer" ? "Перенаправляем в Twitch…" : "Продолжить как стример"}
-            </span>
-            <ArrowUpRight size={18} aria-hidden="true" />
-          </a>
-          <a
-            className="lxst-button lxst-button-secondary"
-            href="/api/auth/twitch/start/moderator"
-            onClick={() => setLoadingMode("moderator")}
-          >
-            <span>
-              {loadingMode === "moderator"
-                ? "Перенаправляем в Twitch…"
-                : "Продолжить как модератор"}
+              {loading ? "Перенаправляем в Twitch…" : "Продолжить через Twitch"}
             </span>
             <ArrowUpRight size={18} aria-hidden="true" />
           </a>
