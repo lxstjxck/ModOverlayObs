@@ -1,10 +1,10 @@
 const publicMetadata = {
   "/": {
-    title: "LXST — инструменты для стримеров",
+    title: "LXST",
     description: "Экосистема инструментов LXST для стримеров и модераторов."
   },
   "/overlay": {
-    title: "LXST Overlay — оверлей для OBS",
+    title: "LXST",
     description: "Управление медиа и интерактивным OBS-оверлеем с доступом для модераторов."
   }
 } as const;

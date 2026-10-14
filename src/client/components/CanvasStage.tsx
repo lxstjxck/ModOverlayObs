@@ -379,7 +379,7 @@ export function CanvasStage({
       >
         {mode === "workspace" && (
           <div className="stage-zoom-controls">
-            <span>{Math.round(scale * 100)}% · колесо</span>
+            <span>{Math.round(scale * 100)}%</span>
             {([null, 0.25, 0.5, 0.75, 1] as const).map((percent) => (
               <button key={percent ?? "fit"} type="button" onClick={() => setZoomPreset(percent)}>
                 {percent === null ? "FIT" : `${percent * 100}%`}

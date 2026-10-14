@@ -586,16 +586,11 @@
 }
 .landing-steps article {
   min-width: 0;
-  padding: var(--space-5) 4px 0;
+  padding: var(--space-5) 0 0;
   border-top: 1px solid #484050;
 }
-.landing-steps article > span {
-  color: var(--ui-accent);
-  font-size: 12px;
-  font-weight: 700;
-}
 .landing-steps h3 {
-  margin: var(--space-5) 0 var(--space-3);
+  margin: 0 0 var(--space-3);
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.035em;
@@ -900,7 +895,7 @@
     padding-top: var(--space-4);
   }
   .landing-steps h3 {
-    margin-top: 12px;
+    margin-top: 0;
   }
   .landing-feature-grid {
     grid-template-columns: 1fr;

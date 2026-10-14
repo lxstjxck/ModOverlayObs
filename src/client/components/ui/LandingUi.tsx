@@ -45,12 +45,10 @@ export function SectionHeading({
 
 export function FeatureCard({
   icon,
-  number,
   title,
   children
 }: {
   icon: ReactNode;
-  number: string;
   title: string;
   children: ReactNode;
 }) {
@@ -58,7 +56,6 @@ export function FeatureCard({
     <article className="landing-feature-card">
       <div className="landing-feature-top">
         <span className="landing-feature-icon">{icon}</span>
-        <span>{number}</span>
       </div>
       <h3>{title}</h3>
       <p>{children}</p>

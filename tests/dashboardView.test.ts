@@ -74,7 +74,7 @@ describe("Twitch dashboard presentation", () => {
   it("hides the OBS URL by default while keeping copy controls and real editor route", () => {
     const html = render();
     expect(html).toContain("<h1>Панель управления</h1>");
-    expect(html).toContain('href="#overview"');
+    expect(html).not.toContain('href="#overview"');
     expect(html).toContain('id="overview"');
     expect(html).toContain('type="password"');
     expect(html).toContain('aria-label="Копировать URL"');
@@ -108,6 +108,15 @@ describe("Twitch dashboard presentation", () => {
     expect(html).not.toContain('id="obs"');
     expect(html).not.toContain('id="canvas"');
     expect(html).not.toContain('href="/channel/channel-1"');
+    expect(html).toContain('class="lxst-channel-card lxst-channel-card-compact"');
+    expect(html).toContain('class="lxst-channel-icon-slot"');
+    expect(html).not.toContain("КАБИНЕТ МОДЕРАТОРА");
+  });
+
+  it("keeps loaded channel content visible during a refresh", () => {
+    const html = render({ mode: "moderator", loading: true, channels: [{ ...channel, twitchId: "other", role: "moderator" }] });
+    expect(html).toContain("Открыть редактор");
+    expect(html).not.toContain("Загружаем каналы…");
   });
 
   it.each([

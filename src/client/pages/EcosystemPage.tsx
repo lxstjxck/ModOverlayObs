@@ -87,7 +87,7 @@ function EcosystemContent() {
       >
         <div className="ecosystem-section-heading">
           <div>
-            <p className="landing-eyebrow">01 / СЕРВИСЫ</p>
+            <p className="landing-eyebrow">СЕРВИСЫ</p>
             <h2 id="services-title">Твои инструменты для эфира.</h2>
           </div>
           <p>Начни с оверлея. Новые возможности уже в планах.</p>
@@ -103,8 +103,8 @@ function EcosystemContent() {
               <span className="ecosystem-status">Скоро появится</span>
             </div>
             <div>
-              <p className="ecosystem-card-kicker">02 / ОБЩЕНИЕ</p>
-              <h3>LXST Chat</h3>
+              <p className="ecosystem-card-kicker">ОБЩЕНИЕ</p>
+              <h3>Chat</h3>
               <p className="ecosystem-card-description">
                 Кастомный Twitch-чат для OBS с поддержкой смайлов, значков пользователей и гибкого
                 оформления.
@@ -115,7 +115,7 @@ function EcosystemContent() {
         </div>
       </section>
 
-      <PublicFooter product="LXST" description="Инструменты для твоего эфира." />
+      <PublicFooter product="LXST" />
     </main>
   );
 }
@@ -134,8 +134,8 @@ export function OverlayServiceCard({ status }: { status: PublicAuthStatus }) {
         <span className="ecosystem-status ecosystem-status-live">Доступен</span>
       </div>
       <div>
-        <p className="ecosystem-card-kicker">01 / ПРЯМОЙ ЭФИР</p>
-        <h3>LXST Overlay</h3>
+        <p className="ecosystem-card-kicker">ПРЯМОЙ ЭФИР</p>
+        <h3>Overlay</h3>
         <p className="ecosystem-card-description">
           Управляй изображениями, видео, текстом и смайлами на трансляции вместе с командой
           модераторов.

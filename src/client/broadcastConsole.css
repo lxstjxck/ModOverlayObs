@@ -705,13 +705,6 @@
   align-content: start;
 }
 
-.moderator-app .properties-panel > .panel-title::before {
-  content: "03";
-  margin-right: var(--space-1);
-  color: var(--console-accent);
-  font-variant-numeric: tabular-nums;
-}
-
 .moderator-app .properties-panel input[type="range"] {
   display: block;
   width: 100%;

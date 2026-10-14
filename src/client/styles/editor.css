@@ -127,13 +127,13 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  border: 1px solid var(--ui-border-accent);
+  border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface-raised);
+  background: var(--ui-surface);
   text-decoration: none;
-  color: var(--ui-accent-strong);
+  color: var(--ui-ink);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1;
 }
 .moderator-app .setup-link:hover {
@@ -142,6 +142,9 @@
 .moderator-app .workspace {
   grid-template-columns: minmax(260px, 290px) minmax(0, 1fr) minmax(250px, 275px);
   background: var(--ui-border);
+}
+.moderator-app .workspace.workspace-no-properties {
+  grid-template-columns: minmax(260px, 290px) minmax(0, 1fr);
 }
 .moderator-app .asset-sidebar,
 .moderator-app .media-library,
@@ -314,6 +317,18 @@
   font-weight: 600;
   letter-spacing: -0.045em;
 }
+.moderator-app .workspace-heading-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.moderator-app .properties-toggle {
+  min-height: var(--space-6);
+  padding-inline: var(--space-3);
+  font-size: 11px;
+}
 .moderator-app .canvas-resolution {
   border-color: var(--ui-border);
   border-radius: var(--ui-radius-pill);
@@ -364,7 +379,7 @@
 .moderator-app .stage-zoom-controls {
   flex-wrap: wrap;
   max-width: calc(100% - 24px);
-  border-color: var(--ui-border-accent);
+  border: 0;
   border-radius: var(--ui-radius-sm);
   background: #101014ed;
 }
@@ -385,9 +400,6 @@
 }
 .moderator-app .properties-panel {
   padding: 16px;
-}
-.moderator-app .properties-panel > .panel-title::before {
-  color: var(--ui-accent);
 }
 .moderator-app .properties-panel .field {
   color: #c6c0d0;

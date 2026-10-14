@@ -51,7 +51,7 @@ export function TwitchLoginPage() {
         >
           <div className="lxst-auth-card-top">
             <Radio size={22} aria-hidden="true" />
-            <span>01 / ВХОД</span>
+            <span>ВХОД</span>
           </div>
           <h2 id="auth-title">Войти через Twitch</h2>
           <p>Один вход откроет все доступные каналы. Twitch запросит права на проверку вашего канала и модерации.</p>

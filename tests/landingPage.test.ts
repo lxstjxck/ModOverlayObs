@@ -26,8 +26,10 @@ describe("public landing page", () => {
     vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
     const html = renderToStaticMarkup(React.createElement(App));
     expect(html).toContain("LXST ECOSYSTEM");
-    expect(html).toContain("LXST Overlay");
-    expect(html).toContain("LXST Chat");
+    expect(html).toContain("<h3>Overlay</h3>");
+    expect(html).toContain("<h3>Chat</h3>");
+    expect(html).not.toContain("Инструменты для твоего эфира.");
+    expect(html).not.toMatch(/0[1-9] \/ /);
     expect(html).not.toContain('href="/overlay"');
     expect(html).toContain('href="#services"');
     expect(html).toContain('href="/" aria-label="LXST — главная"');
@@ -209,15 +211,15 @@ describe("public landing page", () => {
       })
     } as unknown as Document;
     setPublicPageMetadata("/", page);
-    expect(page.title).toBe("LXST — инструменты для стримеров");
+    expect(page.title).toBe("LXST");
     expect(description).toBe("Экосистема инструментов LXST для стримеров и модераторов.");
     setPublicPageMetadata("/overlay", page);
-    expect(page.title).toBe("LXST Overlay — оверлей для OBS");
+    expect(page.title).toBe("LXST");
     expect(description).toBe(
       "Управление медиа и интерактивным OBS-оверлеем с доступом для модераторов."
     );
     setPublicPageMetadata("/streamer", page);
-    expect(page.title).toBe("LXST Overlay — оверлей для OBS");
+    expect(page.title).toBe("LXST");
   });
 
   it("explains the supported workflow and distinguishes preview from OBS", () => {

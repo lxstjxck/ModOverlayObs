@@ -12,21 +12,34 @@
   border-bottom: 1px solid #292631;
   background: rgba(11, 11, 14, 0.92);
   backdrop-filter: blur(18px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.ecosystem-header > .public-auth,
+.ecosystem-header > .public-auth-status {
+  justify-self: end;
+}
+
+.ecosystem-header nav {
+  justify-self: center;
 }
 
 .ecosystem-hero {
   min-height: clamp(500px, 61vh, 690px);
   position: relative;
-  display: flex;
-  align-items: center;
+  display: grid;
+  align-content: center;
   padding-block: var(--space-8);
 }
 
 .ecosystem-hero-content {
   position: relative;
   z-index: 1;
+  width: 100%;
   max-width: 980px;
-  padding-left: 0;
 }
 
 .ecosystem-hero h1 {
@@ -283,19 +296,16 @@
     height: 72px;
   }
 
-  .ecosystem-header nav {
-    display: flex;
-    gap: 0;
+  .ecosystem-header {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
-
+  .ecosystem-header nav {
+    display: none;
+  }
   .ecosystem-hero {
     min-height: 520px;
     padding-block: 88px var(--space-8);
-  }
-
-  .ecosystem-hero-content {
-    padding-left: 0;
   }
 
   .ecosystem-hero h1 {
@@ -357,6 +367,23 @@
   .ecosystem-service-icon svg {
     width: 42px;
     height: 42px;
+  }
+}
+
+@media (max-width: 520px) {
+  .ecosystem-header {
+    height: auto;
+    min-height: 72px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ecosystem-header > .public-auth,
+  .ecosystem-header > .public-auth-status {
+    justify-self: start;
+  }
+
+  .ecosystem-services {
+    scroll-margin-top: var(--space-9);
   }
 }
 

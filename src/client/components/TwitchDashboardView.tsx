@@ -152,13 +152,15 @@ export function TwitchDashboardView(props: DashboardProps) {
     <main className="lxst-dashboard">
       <header className="lxst-dashboard-header">
         <div className="lxst-shell lxst-dashboard-header-inner">
-          <BrandIdentity />
-          {me && <nav className="lxst-dashboard-nav" aria-label="Разделы кабинета">
-            {mode === "streamer" ? <>
-              <a href="#overview">Обзор</a>
-              {ownChannel && <><a href="#obs">OBS</a><a href="#moderators">Модераторы</a><a href="#canvas">Холст</a><a href="#tts">TTS</a></>}
-            </> : <a href="#channels">Каналы</a>}
-          </nav>}
+          <BrandIdentity product={null} />
+          {me && mode === "streamer" && ownChannel && (
+            <nav className="lxst-dashboard-nav" aria-label="Разделы кабинета">
+              <a href="#obs">OBS</a>
+              <a href="#moderators">Модераторы</a>
+              <a href="#canvas">Холст</a>
+              <a href="#tts">TTS</a>
+            </nav>
+          )}
           {me && (
             <button className="lxst-header-logout" type="button" onClick={onLogout}>
               <LogOut size={16} aria-hidden="true" />
@@ -168,50 +170,46 @@ export function TwitchDashboardView(props: DashboardProps) {
         </div>
       </header>
       <div className="lxst-shell lxst-dashboard-content">
-        <div className="lxst-dashboard-title-row">
-          <div>
-              {mode === "moderator" && (
-                <p className="landing-eyebrow">
-                  <span className="landing-eyebrow-line" />{" "}
-                  КАБИНЕТ МОДЕРАТОРА
-                </p>
-              )}
-            <h1>{mode === "streamer" ? "Панель управления" : "Ваши каналы."}</h1>
-            <p className="lxst-dashboard-lead">
-              {mode === "streamer"
-                ? "Канал, команда и настройки оверлея в одном месте."
-                : "Выберите доступный канал и откройте его редактор."}
-            </p>
+        <div className="lxst-dashboard-intro">
+          <div className="lxst-dashboard-title-row">
+            <div>
+              <h1>{mode === "streamer" ? "Панель управления" : "Ваши каналы."}</h1>
+              <p className="lxst-dashboard-lead">
+                {mode === "streamer"
+                  ? "Канал, команда и настройки оверлея в одном месте."
+                  : "Выберите доступный канал и откройте его редактор."}
+              </p>
+            </div>
+            {me && (
+              <div className="lxst-dashboard-account">
+                <ChannelAvatar name={me.displayName} src={me.avatarUrl} />
+                <span>
+                  <strong>{me.displayName}</strong>
+                  <small>@{me.login}</small>
+                </span>
+              </div>
+            )}
           </div>
           {me && (
-            <div className="lxst-dashboard-account">
-              <ChannelAvatar name={me.displayName} src={me.avatarUrl} />
-              <span>
-                <strong>{me.displayName}</strong>
-                <small>@{me.login}</small>
-              </span>
+            <div className="lxst-dashboard-toolbar">
+              <nav className="lxst-mode-switch" aria-label="Режим кабинета">
+                <button type="button" aria-current={mode === "streamer" ? "page" : undefined}
+                  onClick={() => onSelectMode("streamer")}>Стример</button>
+                <button type="button" aria-current={mode === "moderator" ? "page" : undefined}
+                  onClick={() => onSelectMode("moderator")}>Модератор</button>
+              </nav>
+              <button
+                type="button"
+                className="lxst-quiet-button"
+                onClick={onRefresh}
+                disabled={loading}
+              >
+                <RefreshCw size={15} className={loading ? "spin" : ""} aria-hidden="true" />
+                {loading ? "Обновляем…" : "Обновить"}
+              </button>
             </div>
           )}
         </div>
-        {me && (
-          <div className="lxst-dashboard-toolbar">
-            <nav className="lxst-mode-switch" aria-label="Режим кабинета">
-              <button type="button" aria-current={mode === "streamer" ? "page" : undefined}
-                onClick={() => onSelectMode("streamer")}>Стример</button>
-              <button type="button" aria-current={mode === "moderator" ? "page" : undefined}
-                onClick={() => onSelectMode("moderator")}>Модератор</button>
-            </nav>
-            <button
-              type="button"
-              className="lxst-quiet-button"
-              onClick={onRefresh}
-              disabled={loading}
-            >
-              <RefreshCw size={15} className={loading ? "spin" : ""} aria-hidden="true" />
-              {loading ? "Обновляем…" : "Обновить"}
-            </button>
-          </div>
-        )}
         {error && (
           <div className="lxst-alert" role="alert">
             {error}
@@ -225,11 +223,11 @@ export function TwitchDashboardView(props: DashboardProps) {
           <div className="lxst-dashboard-grid" aria-busy={loading}>
             <DashboardSection
               id="overview"
-              eyebrow="01 / КАНАЛ"
+              eyebrow="КАНАЛ"
               title="Обзор"
               className="lxst-overview"
             >
-              {loading ? (
+              {loading && channels.length === 0 ? (
                 <p className="lxst-muted" role="status">
                   Загружаем данные канала…
                 </p>
@@ -308,7 +306,7 @@ export function TwitchDashboardView(props: DashboardProps) {
               <>
                 <DashboardSection
                   id="obs"
-                  eyebrow="02 / ТРАНСЛЯЦИЯ"
+                  eyebrow="ТРАНСЛЯЦИЯ"
                   title="OBS Browser Source"
                   className="lxst-obs"
                 >
@@ -383,7 +381,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="moderators"
-                  eyebrow="03 / КОМАНДА"
+                  eyebrow="КОМАНДА"
                   title="Модераторы"
                   className="lxst-moderators"
                 >
@@ -434,7 +432,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="canvas"
-                  eyebrow="04 / КОМПОЗИЦИЯ"
+                  eyebrow="КОМПОЗИЦИЯ"
                   title="Холст"
                   className="lxst-canvas"
                 >
@@ -592,7 +590,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="tts"
-                  eyebrow="05 / ОЗВУЧКА"
+                  eyebrow="ОЗВУЧКА"
                   title="Twitch TTS"
                   className="lxst-tts"
                 >
@@ -708,7 +706,7 @@ export function TwitchDashboardView(props: DashboardProps) {
         ) : (
           <DashboardSection
             id="channels"
-            eyebrow="01 / ДОСТУПНЫЕ КАНАЛЫ"
+            eyebrow="ДОСТУПНЫЕ КАНАЛЫ"
             title="Каналы модератора"
             className="lxst-channels"
           >
@@ -721,16 +719,16 @@ export function TwitchDashboardView(props: DashboardProps) {
                 placeholder="Название канала"
               />
             </label>
-            {loading ? (
+            {loading && channels.length === 0 ? (
               <p className="lxst-muted" role="status">
                 Загружаем каналы…
               </p>
             ) : (
               <div className="lxst-channel-grid">
                 {filteredChannels.map((channel) => (
-                  <article className="lxst-channel-card" key={channel.twitchId}>
+                  <article className={`lxst-channel-card ${channel.status === "unconnected" ? "lxst-channel-card-compact" : ""}`} key={channel.twitchId}>
                     <div className="lxst-channel-card-top">
-                      <ChannelAvatar name={channel.displayName} src={channel.avatarUrl} />
+                      <span className="lxst-channel-icon-slot" aria-hidden="true" />
                       <StatusPill
                         tone={
                           channel.status === "connected"

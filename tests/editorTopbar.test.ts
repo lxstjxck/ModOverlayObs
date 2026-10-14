@@ -46,6 +46,8 @@ describe("editor topbar", () => {
     expect(html).toContain('href="/channels"');
     expect(html).toContain("Мои каналы");
     expect(html).toContain("OBS OFFLINE");
+    expect(html).toContain("vtest");
+    expect(html).not.toContain("Broadcast Console");
     expect(html).not.toContain("Default Streamer");
     expect(html).not.toContain("Добавить текст");
     expect(html).not.toContain("СЕРВЕР ОНЛАЙН");

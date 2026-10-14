@@ -77,7 +77,7 @@ export function EditorTopbar({
             LXST <span>OVERLAY</span>
           </strong>
           <small>
-            Broadcast Console <span aria-hidden="true">/</span> v{appVersion}
+            v{appVersion}
           </small>
         </span>
       </div>
@@ -130,6 +130,7 @@ export function EditorTopbar({
 export function ModeratorApp() {
   const [user, setUser] = useState<UserView | null>(null);
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
+  const [propertiesVisible, setPropertiesVisible] = useState(true);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [mediaLoading, setMediaLoading] = useState(true);
   const [uploadingCount, setUploadingCount] = useState(0);
@@ -767,7 +768,7 @@ export function ModeratorApp() {
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
-    window.location.href = "/login";
+    window.location.href = "/";
   }
 
   return (
@@ -807,10 +808,10 @@ export function ModeratorApp() {
         </div>
       )}
 
-      <div className="workspace">
+      <div className={`workspace ${propertiesVisible ? "" : "workspace-no-properties"}`}>
         <div className="asset-sidebar">
           <div className="sidebar-heading">
-            <span>01</span> SOURCE LIBRARY
+            SOURCE LIBRARY
           </div>
           <div className="asset-tabs">
             <button
@@ -869,12 +870,17 @@ export function ModeratorApp() {
         <section className="workspace-center" aria-label="Canvas workspace">
           <div className="workspace-heading">
             <div>
-              <span className="section-index">02 / COMPOSITION</span>
               <h1>Рабочая область</h1>
             </div>
-            <span className="canvas-resolution">
-              <Monitor size={14} /> OBS {streamer.canvasWidth} × {streamer.canvasHeight}
-            </span>
+            <div className="workspace-heading-actions">
+              <span className="canvas-resolution">
+                <Monitor size={14} /> OBS {streamer.canvasWidth} × {streamer.canvasHeight}
+              </span>
+              <button type="button" className="properties-toggle" aria-pressed={propertiesVisible}
+                onClick={() => setPropertiesVisible((visible) => !visible)}>
+                {propertiesVisible ? "Скрыть свойства" : "Показать свойства"}
+              </button>
+            </div>
           </div>
           <CanvasStage
             key={streamer.canvasRevision}
@@ -899,7 +905,7 @@ export function ModeratorApp() {
           </div>
         </section>
 
-        <PropertiesPanel
+        {propertiesVisible && <PropertiesPanel
           selected={selected}
           onUpdate={patchPreviewLocal}
           onDuplicate={() => {
@@ -914,7 +920,7 @@ export function ModeratorApp() {
               emit("preview:remove", { id: selectedId });
             }
           }}
-        />
+        />}
       </div>
 
       <footer className="bottom-panels single-panel">

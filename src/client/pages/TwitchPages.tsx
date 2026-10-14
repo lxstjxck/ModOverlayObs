@@ -23,6 +23,16 @@ import { TwitchDashboardView } from "../components/TwitchDashboardView";
 import { FeatureCard, SectionHeading } from "../components/ui/LandingUi";
 
 type TwitchMe = { user: TwitchProfileView; csrfToken: string };
+
+function keepUnchangedChannels(current: TwitchChannelView[], next: TwitchChannelView[]) {
+  return current.length === next.length && current.every((channel, index) => {
+    const updated = next[index];
+    return updated && channel.id === updated.id && channel.twitchId === updated.twitchId &&
+      channel.displayName === updated.displayName && channel.avatarUrl === updated.avatarUrl &&
+      channel.status === updated.status && channel.role === updated.role;
+  }) ? current : next;
+}
+
 export function TwitchLandingPage() {
   return <PublicAuthProvider><TwitchLandingContent /></PublicAuthProvider>;
 }
@@ -74,24 +84,21 @@ function TwitchLandingContent() {
         <div className="landing-shell">
           <SectionHeading
             id="how-title"
-            eyebrow="01 / ПРОСТОЕ ПОДКЛЮЧЕНИЕ"
+            eyebrow="ПРОСТОЕ ПОДКЛЮЧЕНИЕ"
             title="От входа до эфира — несколько шагов."
           >
             Стример подключает канал, а команда получает удобное пространство для работы с оверлеем.
           </SectionHeading>
           <div className="landing-steps">
             <article>
-              <span>01</span>
               <h3>Подключите Twitch</h3>
               <p>Войдите как стример и подключите свой канал.</p>
             </article>
             <article>
-              <span>02</span>
               <h3>Добавьте источник в OBS</h3>
               <p>Скопируйте адрес оверлея в Browser Source.</p>
             </article>
             <article>
-              <span>03</span>
               <h3>Дайте доступ команде</h3>
               <p>Управляйте доступом модераторов в панели стримера.</p>
             </article>
@@ -106,22 +113,22 @@ function TwitchLandingContent() {
       >
         <SectionHeading
           id="features-title"
-          eyebrow="02 / ВОЗМОЖНОСТИ"
+          eyebrow="ВОЗМОЖНОСТИ"
           title="Эфир становится живее."
         >
           Всё необходимое для совместной работы с контентом на трансляции.
         </SectionHeading>
         <div className="landing-feature-grid">
-          <FeatureCard icon={<Image size={23} />} number="01" title="Медиа на холсте">
+          <FeatureCard icon={<Image size={23} />} title="Медиа на холсте">
             Модераторы размещают изображения, GIF, видео и текст прямо на полотне оверлея.
           </FeatureCard>
-          <FeatureCard icon={<Smile size={23} />} number="02" title="Смайлы канала">
+          <FeatureCard icon={<Smile size={23} />} title="Смайлы канала">
             Смайлы Twitch и 7TV можно добавить в область подготовки и расположить на холсте.
           </FeatureCard>
-          <FeatureCard icon={<LockKeyhole size={23} />} number="03" title="Контроль доступа">
+          <FeatureCard icon={<LockKeyhole size={23} />} title="Контроль доступа">
             Стример подключает канал и управляет тем, кому из модераторов доступен оверлей.
           </FeatureCard>
-          <FeatureCard icon={<AudioLines size={23} />} number="04" title="Twitch TTS">
+          <FeatureCard icon={<AudioLines size={23} />} title="Twitch TTS">
             Подключайте озвучивание сообщений из чата через команду или награду за баллы канала.
           </FeatureCard>
         </div>
@@ -189,19 +196,11 @@ export function TwitchDashboardPage() {
     let loadedChannels: TwitchChannelView[] | null = null;
     setLoading(true);
     setError("");
-    setChannels([]);
-    setObs(null);
-    setCanvas(null);
-    canvasRevisionRef.current = "";
-    setPresence(null);
-    setModerators([]);
-    setTts(null);
-    setReloadStatus(null);
     try {
       const result = await api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels");
       if (revision !== loadRevision.current) return;
       loadedChannels = result.channels;
-      setChannels(result.channels);
+      setChannels((current) => keepUnchangedChannels(current, result.channels));
       const own = userId ? ownTwitchChannel(result.channels, userId) : null;
       if (own?.status === "connected" && own.id) {
         const id = own.id;
@@ -220,15 +219,21 @@ export function TwitchDashboardPage() {
         setModerators(list.moderators);
         setTts(ttsView);
         setTtsCost(ttsView.rewardCost);
+      } else {
+        setObs(null);
+        setCanvas(null);
+        canvasRevisionRef.current = "";
+        setPresence(null);
+        setModerators([]);
+        setTts(null);
+        setReloadStatus(null);
       }
     } catch (loadError) {
       if (revision !== loadRevision.current) return;
-      setChannels(loadedChannels?.map((channel) => channel.role === "owner" && channel.twitchId === userId
-        ? { ...channel, status: "error" as const } : channel) ?? []);
-      setObs(null);
-      setCanvas(null);
-      setModerators([]);
-      setTts(null);
+      if (loadedChannels) {
+        setChannels(loadedChannels.map((channel) => channel.role === "owner" && channel.twitchId === userId
+          ? { ...channel, status: "error" as const } : channel));
+      }
       setError(
         loadError instanceof Error ? loadError.message : "Не удалось проверить доступ через Twitch"
       );
@@ -243,7 +248,7 @@ export function TwitchDashboardPage() {
         setMe(value);
         void load(value.user.id);
       })
-      .catch(() => window.location.replace("/login"));
+      .catch(() => window.location.replace("/"));
   }, []);
 
   useEffect(() => {
@@ -262,7 +267,7 @@ export function TwitchDashboardPage() {
       void api<{ channels: TwitchChannelView[] }>("/api/auth/twitch/channels")
         .then((result) => {
           if (!mounted) return;
-          setChannels(result.channels);
+          setChannels((current) => keepUnchangedChannels(current, result.channels));
           const updatedOwn = ownTwitchChannel(result.channels, me.user.id);
           if (updatedOwn?.id !== ownChannel?.id || updatedOwn?.status !== ownProfile?.status) {
             void load();
@@ -272,14 +277,9 @@ export function TwitchDashboardPage() {
         .catch((refreshError: unknown) => {
           if (!mounted) return;
           if (refreshError instanceof ApiError && refreshError.status === 401) {
-            window.location.replace("/login");
+            window.location.replace("/");
             return;
           }
-          setChannels([]);
-          setObs(null);
-          setCanvas(null);
-          setModerators([]);
-          setTts(null);
           setError(refreshError instanceof Error ? refreshError.message : "Не удалось обновить список каналов");
         });
     };
@@ -410,7 +410,7 @@ export function TwitchDashboardPage() {
 
   async function logout() {
     await api("/api/auth/logout", { method: "POST" });
-    window.location.replace("/login");
+    window.location.replace("/");
   }
 
   async function toggleTts() {
