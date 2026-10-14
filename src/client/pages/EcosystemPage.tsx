@@ -51,9 +51,6 @@ function EcosystemContent() {
     <main className="landing-page ecosystem-page">
       <header className="landing-header landing-shell ecosystem-header">
         <BrandIdentity className="landing-brand" product={null} />
-        <nav aria-label="Навигация по странице">
-          <a href="#services">Сервисы</a>
-        </nav>
         <PublicAuthControls compact />
       </header>
 

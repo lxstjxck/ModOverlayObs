@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import type { OverlayElement } from "../src/shared/types";
 import {
   calculateFitScale,
@@ -41,6 +42,14 @@ const element: OverlayElement = {
 const pointer = { altKey: false, ctrlKey: false, metaKey: false, shiftKey: false };
 
 describe("canvas geometry", () => {
+  it("disables text selection only in the interactive workspace viewport", () => {
+    const css = readFileSync(new URL("../src/client/styles.css", import.meta.url), "utf8");
+    const rule = css.match(/\.stage-workspace \.stage-scroll\s*\{([^}]+)\}/)?.[1];
+    expect(rule).toMatch(/(?:^|\n)\s*user-select:\s*none;/);
+    expect(rule).toMatch(/(?:^|\n)\s*-webkit-user-select:\s*none;/);
+    expect(css).not.toMatch(/(?:^|\n)\s*(?:html|body|\.stage-overlay|\.moderator-app)\s*\{[^}]*user-select:\s*none;/);
+  });
+
   it.each([-120, 120])("zooms with wheel delta %i without a Ctrl modifier", (deltaY) => {
     const current = 1;
     const result = zoomAroundPointer(current, deltaY, 300, 240, { x: 500, y: 400 }, 0.5, {

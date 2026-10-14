@@ -6,22 +6,19 @@
 
 .ecosystem-header {
   min-height: var(--space-8);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: var(--space-5);
 }
 
 .ecosystem-header > .public-auth,
 .ecosystem-header > .public-auth-status {
-  justify-self: end;
-}
-
-.ecosystem-header nav {
-  justify-self: center;
+  margin-left: auto;
+  min-width: 0;
+  justify-content: flex-end;
 }
 
 .ecosystem-hero {
+  --hero-title-size: clamp(56px, 6.2vw, 105px);
   min-height: clamp(500px, 61vh, 690px);
   position: relative;
   display: grid;
@@ -41,7 +38,7 @@
 .ecosystem-hero h1 {
   max-width: 900px;
   margin: 0;
-  font-size: clamp(56px, 6.2vw, 105px);
+  font-size: var(--hero-title-size);
   font-weight: 300;
   letter-spacing: -0.075em;
   line-height: 1.07;
@@ -55,6 +52,8 @@
 .ecosystem-hero-lead {
   max-width: 590px;
   margin: var(--space-5) 0 0;
+  /* Montserrat's first title glyph has a wider left side bearing than the lead's. */
+  padding-inline-start: calc(var(--hero-title-size) * 0.1);
   color: #aaa8b5;
   font-size: clamp(16px, 1.3vw, 19px);
   line-height: 1.75;
@@ -282,34 +281,16 @@
     opacity: 0.3;
   }
 
-  .ecosystem-hero h1 {
-    font-size: clamp(56px, 7vw, 84px);
+  .ecosystem-hero {
+    --hero-title-size: clamp(56px, 7vw, 84px);
   }
 }
 
 @media (max-width: 700px) {
-  .ecosystem-header {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .ecosystem-header nav {
-    display: flex;
-    justify-self: end;
-  }
-
-  .ecosystem-header > .public-auth,
-  .ecosystem-header > .public-auth-status {
-    grid-column: 1 / -1;
-    justify-self: start;
-    min-width: 0;
-  }
   .ecosystem-hero {
+    --hero-title-size: clamp(45px, 11vw, 64px);
     min-height: 520px;
     padding-block: 88px var(--space-8);
-  }
-
-  .ecosystem-hero h1 {
-    font-size: clamp(45px, 11vw, 64px);
   }
 
   .ecosystem-hero-lead {

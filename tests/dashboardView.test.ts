@@ -72,6 +72,23 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
 }
 
 describe("Twitch dashboard presentation", () => {
+  it("keeps one current Twitch account in the header across both dashboard modes", () => {
+    const current = { ...profile, displayName: "Creator Display Name", login: "creator_login", avatarUrl: "https://cdn.example/user.png" };
+    const headers = (["streamer", "moderator"] as const).map((mode) => {
+      const html = render({ mode, me: current });
+      const header = html.match(/<header class="lxst-dashboard-header">[\s\S]*?<\/header>/)?.[0];
+      expect(header).toContain('class="lxst-dashboard-account"');
+      expect(header).toContain('src="https://cdn.example/user.png"');
+      expect(header).toContain("Creator Display Name");
+      expect(header).toContain("@creator_login");
+      expect(header).toContain("Выйти");
+      expect(html.match(/class="lxst-dashboard-account"/g)).toHaveLength(1);
+      expect(html.match(/<div class="lxst-dashboard-intro">[\s\S]*?<\/div><\/div>/)?.[0]).not.toContain('class="lxst-dashboard-account"');
+      return header;
+    });
+    expect(headers[0]).toBe(headers[1]);
+  });
+
   it("hides the OBS URL by default while keeping copy controls and real editor route", () => {
     const html = render();
     expect(html).toContain("<h1>Панель управления</h1>");

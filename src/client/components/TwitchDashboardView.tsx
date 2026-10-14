@@ -154,6 +154,15 @@ export function TwitchDashboardView(props: DashboardProps) {
         <div className="lxst-shell lxst-dashboard-header-inner">
           <BrandIdentity product={null} />
           {me && (
+            <div className="lxst-dashboard-account">
+              <ChannelAvatar name={me.displayName} src={me.avatarUrl} />
+              <span>
+                <strong>{me.displayName}</strong>
+                <small>@{me.login}</small>
+              </span>
+            </div>
+          )}
+          {me && (
             <button className="lxst-header-logout" type="button" onClick={onLogout}>
               <LogOut size={16} aria-hidden="true" />
               <span>Выйти</span>
@@ -172,15 +181,6 @@ export function TwitchDashboardView(props: DashboardProps) {
                   : "Выберите доступный канал и откройте его редактор."}
               </p>
             </div>
-            {me && (
-              <div className="lxst-dashboard-account">
-                <ChannelAvatar name={me.displayName} src={me.avatarUrl} />
-                <span>
-                  <strong>{me.displayName}</strong>
-                  <small>@{me.login}</small>
-                </span>
-              </div>
-            )}
           </div>
           {me && (
             <div className="lxst-dashboard-toolbar">

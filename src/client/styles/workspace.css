@@ -313,9 +313,6 @@
   color: #c5c0cd;
   font-size: 11px;
 }
-.lxst-header-logout {
-  margin-left: auto;
-}
 .lxst-dashboard .lxst-header-logout:hover,
 .lxst-dashboard .lxst-quiet-button:hover {
   border-color: var(--ui-border-accent);
@@ -336,10 +333,7 @@
   background: var(--ui-surface);
 }
 .lxst-dashboard-title-row {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 24px;
+  min-width: 0;
 }
 .lxst-dashboard-title-row h1 {
   margin: 0;
@@ -358,6 +352,7 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  margin-left: auto;
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-pill);
@@ -366,6 +361,7 @@
 .lxst-dashboard-account > span:last-child {
   display: grid;
   min-width: 0;
+  overflow: hidden;
   line-height: 1.4;
 }
 .lxst-dashboard-account strong {
@@ -376,6 +372,9 @@
   white-space: nowrap;
 }
 .lxst-dashboard-account small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ui-muted);
   font-size: 10px;
 }
@@ -877,27 +876,22 @@
     min-height: 67px;
     gap: var(--space-3);
   }
-  .lxst-dashboard-header-inner {
-    flex-wrap: wrap;
+  .lxst-dashboard-account {
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
   }
-  .lxst-header-logout {
-    margin-left: auto;
+  .lxst-dashboard-account .lxst-avatar {
+    width: var(--space-6);
+    height: var(--space-6);
   }
   .lxst-dashboard-content {
     padding-block: var(--space-6) var(--space-8);
   }
   .lxst-dashboard-intro {
-    min-height: calc(var(--space-9) + var(--space-8) + var(--space-8));
-  }
-  .lxst-dashboard-title-row {
-    align-items: flex-start;
-    flex-direction: column;
+    min-height: 0;
   }
   .lxst-dashboard-title-row h1 {
     font-size: clamp(40px, 9vw, 58px);
-  }
-  .lxst-dashboard-account {
-    align-self: flex-start;
   }
   .lxst-dashboard-toolbar {
     margin-top: var(--space-5);

@@ -665,6 +665,11 @@ input[type="color"] {
   padding: var(--space-2);
 }
 
+.stage-workspace .stage-scroll {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .stage-surface {
   position: relative;
   width: 100%;

@@ -32,6 +32,8 @@ describe("public landing page", () => {
     expect(html).not.toMatch(/0[1-9] \/ /);
     expect(html).not.toContain('href="/overlay"');
     expect(html).toContain('href="#services"');
+    expect(html.match(/href="#services"/g)).toHaveLength(1);
+    expect(html.match(/<header[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("Сервисы");
     expect(html).toContain('href="/" aria-label="LXST — главная"');
     expect(html).toContain("Скоро появится");
     expect(html).not.toContain('href="/chat"');
@@ -162,15 +164,15 @@ describe("public landing page", () => {
     expect(ecosystem.match(/<header[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("GitHub");
   });
 
-  it("uses one LX mark asset and the 0.1.8 package version", () => {
+  it("uses one LX mark asset and the 0.1.9 package version", () => {
     const mark = readFileSync(new URL("../src/client/components/BrandMark.tsx", import.meta.url), "utf8");
     const favicon = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
     const identity = readFileSync(new URL("../src/client/components/BrandIdentity.tsx", import.meta.url), "utf8");
     const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-    expect(packageJson.version).toBe("0.1.8");
-    expect(lock.version).toBe("0.1.8");
-    expect(lock.packages[""].version).toBe("0.1.8");
+    expect(packageJson.version).toBe("0.1.9");
+    expect(lock.version).toBe("0.1.9");
+    expect(lock.packages[""].version).toBe("0.1.9");
     expect(mark).toContain('const brandMarkSrc = "/favicon.svg"');
     expect(mark).toContain('<img src={brandMarkSrc}');
     expect(readFileSync(new URL("../index.html", import.meta.url), "utf8")).toContain('href="/favicon.svg"');
