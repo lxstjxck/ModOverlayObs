@@ -176,8 +176,6 @@ export function TwitchDashboardPage() {
   const canvasRevisionRef = useRef("");
   const [width, setWidth] = useState("1920");
   const [height, setHeight] = useState("1080");
-  const [sourceWidth, setSourceWidth] = useState("");
-  const [sourceHeight, setSourceHeight] = useState("");
   const [savingCanvas, setSavingCanvas] = useState(false);
   const [presence, setPresence] = useState<PresenceState | null>(null);
   const [error, setError] = useState("");
@@ -293,11 +291,6 @@ export function TwitchDashboardPage() {
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [me?.user.id, ownChannel?.id, ownProfile?.status]);
-  useEffect(() => {
-    if (!ownChannel?.id) return;
-    setSourceWidth(window.localStorage.getItem(`obs-width:${ownChannel.id}`) ?? "");
-    setSourceHeight(window.localStorage.getItem(`obs-height:${ownChannel.id}`) ?? "");
-  }, [ownChannel?.id]);
   useEffect(() => {
     if (!ownChannel?.id || !tts?.available) return;
     const channelId = ownChannel.id;
@@ -460,7 +453,7 @@ export function TwitchDashboardPage() {
     obs={obs} canvas={canvas} presence={presence} tts={tts}
     reloadStatus={reloadStatus} reloadMessage={reloadMessage} reloadBusy={reloadStarting || reloadStatus?.state === "waiting"}
     onReloadOverlay={() => void reloadOverlay()}
-    width={width} height={height} sourceWidth={sourceWidth} sourceHeight={sourceHeight}
+    width={width} height={height}
     ttsCost={ttsCost} ratio={ratio} changed={Boolean(changed)} dimensionsValid={dimensionsValid}
     loading={loading} connecting={connecting} savingCanvas={savingCanvas} ttsBusy={ttsBusy}
     changingModerator={changingModerator} error={error}
@@ -474,8 +467,6 @@ export function TwitchDashboardPage() {
     onToggleTts={() => void toggleTts()} onSaveTtsReward={() => void saveTtsReward()}
     onSaveCanvas={(changeMode) => void saveCanvas(changeMode)}
     setWidth={setWidth} setHeight={setHeight} setTtsCost={setTtsCost}
-    setSourceWidth={(value) => { setSourceWidth(value); if (ownChannel?.id) window.localStorage.setItem(`obs-width:${ownChannel.id}`, value); }}
-    setSourceHeight={(value) => { setSourceHeight(value); if (ownChannel?.id) window.localStorage.setItem(`obs-height:${ownChannel.id}`, value); }}
   />;
 }
 

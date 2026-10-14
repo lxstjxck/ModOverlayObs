@@ -32,8 +32,6 @@ type DashboardProps = {
   onReloadOverlay: () => void;
   width: string;
   height: string;
-  sourceWidth: string;
-  sourceHeight: string;
   ttsCost: number;
   ratio: [number, number] | null;
   changed: boolean;
@@ -53,8 +51,6 @@ type DashboardProps = {
   onSaveCanvas: (mode: CanvasChangeMode) => void;
   setWidth: (value: string) => void;
   setHeight: (value: string) => void;
-  setSourceWidth: (value: string) => void;
-  setSourceHeight: (value: string) => void;
   setTtsCost: (value: number) => void;
 };
 
@@ -95,8 +91,6 @@ export function TwitchDashboardView(props: DashboardProps) {
     onReloadOverlay,
     width,
     height,
-    sourceWidth,
-    sourceHeight,
     ttsCost,
     ratio,
     changed,
@@ -116,8 +110,6 @@ export function TwitchDashboardView(props: DashboardProps) {
     onSaveCanvas,
     setWidth,
     setHeight,
-    setSourceWidth,
-    setSourceHeight,
     setTtsCost
   } = props;
   const [moderatorQuery, setModeratorQuery] = useState("");
@@ -473,6 +465,10 @@ export function TwitchDashboardView(props: DashboardProps) {
                         Соотношение: {ratio ? `${ratio[0]}:${ratio[1]}` : "некорректный размер"}.
                         Допустимо 320–7680 px на ось, от 1:4 до 4:1.
                       </p>
+                      <p className="lxst-muted">
+                        Размер существующего Browser Source задаётся отдельно в OBS. Установите там
+                        те же Width и Height.
+                      </p>
                       {ratio && (
                         <div
                           className="lxst-canvas-preview"
@@ -526,47 +522,6 @@ export function TwitchDashboardView(props: DashboardProps) {
                           </div>
                         </div>
                       )}
-                      <div className="lxst-source-size">
-                        <h3>Размер Browser Source в OBS</h3>
-                        <p className="lxst-muted">
-                          Введите текущий размер источника вручную. Сайт не меняет его в OBS.
-                        </p>
-                        <div className="lxst-field-pair">
-                          <label className="lxst-field">
-                            OBS Width
-                            <input
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={sourceWidth}
-                              onChange={(event) => setSourceWidth(event.target.value)}
-                            />
-                          </label>
-                          <label className="lxst-field">
-                            OBS Height
-                            <input
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={sourceHeight}
-                              onChange={(event) => setSourceHeight(event.target.value)}
-                            />
-                          </label>
-                        </div>
-                        {sourceWidth && sourceHeight ? (
-                          (Number(sourceWidth) !== canvas.canvasWidth ||
-                            Number(sourceHeight) !== canvas.canvasHeight) && (
-                            <p className="lxst-warning" role="alert">
-                              Размер Browser Source не совпадает с холстом {canvas.canvasWidth} ×{" "}
-                              {canvas.canvasHeight}. Измените Width и Height в OBS вручную.
-                            </p>
-                          )
-                        ) : (
-                          <p className="lxst-muted">
-                            Укажите размер Browser Source, чтобы проверить совпадение с холстом.
-                          </p>
-                        )}
-                      </div>
                     </>
                   ) : (
                     <p className="lxst-muted" role="status">

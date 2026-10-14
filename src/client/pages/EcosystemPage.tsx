@@ -58,7 +58,7 @@ function EcosystemContent() {
         <div className="ecosystem-hero-glow" aria-hidden="true" />
         <div className="ecosystem-hero-content">
           <h1 id="ecosystem-title">
-            Всё для твоего <em>стрима.</em>
+            Всё для твоего стрима
           </h1>
           <p className="ecosystem-hero-lead">
             Инструменты для стримеров и модераторов в одной экосистеме.
@@ -80,10 +80,7 @@ function EcosystemContent() {
         aria-labelledby="services-title"
       >
         <div className="ecosystem-section-heading">
-          <div>
-            <p className="landing-eyebrow">СЕРВИСЫ</p>
-            <h2 id="services-title">Твои инструменты для эфира.</h2>
-          </div>
+          <h2 id="services-title">Твои инструменты для эфира.</h2>
           <p>Начни с оверлея. Новые возможности уже в планах.</p>
         </div>
 

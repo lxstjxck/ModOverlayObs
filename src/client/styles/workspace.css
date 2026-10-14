@@ -712,22 +712,6 @@
   gap: var(--space-2);
   margin-top: 16px;
 }
-.lxst-source-size {
-  margin-top: var(--space-5);
-  padding-top: var(--space-4);
-  border-top: 1px solid var(--ui-border);
-}
-.lxst-source-size h3 {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-.lxst-warning {
-  margin: var(--space-4) 0 0;
-  color: #f0c28d;
-  font-size: 11px;
-  line-height: 1.7;
-}
 .lxst-tts-status {
   display: flex;
   flex-wrap: wrap;

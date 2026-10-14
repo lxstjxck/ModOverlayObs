@@ -40,20 +40,13 @@
   margin: 0;
   font-size: var(--hero-title-size);
   font-weight: 300;
-  letter-spacing: -0.075em;
+  letter-spacing: normal;
   line-height: 1.07;
-}
-
-.ecosystem-hero h1 em {
-  color: var(--ui-accent);
-  font-style: normal;
 }
 
 .ecosystem-hero-lead {
   max-width: 590px;
   margin: var(--space-5) 0 0;
-  /* Montserrat's first title glyph has a wider left side bearing than the lead's. */
-  padding-inline-start: calc(var(--hero-title-size) * 0.1);
   color: #aaa8b5;
   font-size: clamp(16px, 1.3vw, 19px);
   line-height: 1.75;

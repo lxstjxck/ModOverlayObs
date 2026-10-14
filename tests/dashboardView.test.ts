@@ -42,8 +42,6 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     tts: null,
     width: "1920",
     height: "1080",
-    sourceWidth: "1920",
-    sourceHeight: "1080",
     ttsCost: 1000,
     ratio: [16, 9],
     changed: false,
@@ -63,8 +61,6 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     onSaveCanvas: () => {},
     setWidth: () => {},
     setHeight: () => {},
-    setSourceWidth: () => {},
-    setSourceHeight: () => {},
     setTtsCost: () => {},
     ...overrides
   };
@@ -112,6 +108,19 @@ describe("Twitch dashboard presentation", () => {
     expect(html).not.toContain("Клиент подключён");
     expect(html).toContain('aria-current="page">Стример</button>');
     expect(html).not.toContain("<select value=\"user-1\"");
+  });
+
+  it("keeps canvas sizing and save options without Browser Source size inputs", () => {
+    const html = render({ changed: true });
+    expect(html).toContain("Пресет разрешения");
+    expect(html).toContain("Пользовательский размер");
+    expect(html).toContain("Сохранить расположение");
+    expect(html).toContain("Масштабировать композицию");
+    expect(html).toContain("Размер существующего Browser Source задаётся отдельно в OBS");
+    expect(html).not.toContain("Размер Browser Source в OBS");
+    expect(html).not.toContain("OBS Width");
+    expect(html).not.toContain("OBS Height");
+    expect(html).not.toContain("lxst-source-size");
   });
 
   it("offers connection for a selected owner whose Twitch channel is not connected", () => {

@@ -26,6 +26,9 @@ describe("public landing page", () => {
     vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
     const html = renderToStaticMarkup(React.createElement(App));
     expect(html).not.toContain("LXST ECOSYSTEM");
+    expect(html).toContain('<h1 id="ecosystem-title">Всё для твоего стрима</h1>');
+    expect(html).toContain('<h2 id="services-title">Твои инструменты для эфира.</h2>');
+    expect(html).not.toContain("СЕРВИСЫ");
     expect(html).toContain("<h3>Overlay</h3>");
     expect(html).toContain("<h3>Chat</h3>");
     expect(html).not.toContain("Инструменты для твоего эфира.");
