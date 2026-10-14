@@ -25,7 +25,7 @@ describe("public landing page", () => {
     vi.stubGlobal("React", React);
     vi.stubGlobal("window", { location: { pathname: "/", search: "" } });
     const html = renderToStaticMarkup(React.createElement(App));
-    expect(html).toContain("LXST ECOSYSTEM");
+    expect(html).not.toContain("LXST ECOSYSTEM");
     expect(html).toContain("<h3>Overlay</h3>");
     expect(html).toContain("<h3>Chat</h3>");
     expect(html).not.toContain("Инструменты для твоего эфира.");
@@ -118,7 +118,7 @@ describe("public landing page", () => {
     );
     expect(baseCss).toContain("scroll-behavior: smooth");
     expect(baseCss).toContain("@media (prefers-reduced-motion: reduce)");
-    expect(ecosystemCss).toContain("scroll-margin-top: 108px");
+    expect(ecosystemCss).toContain("scroll-margin-top: var(--space-5)");
     expect(ecosystemCss).toContain("@media (prefers-reduced-motion: reduce)");
     expect(landingCss).toContain("@media (prefers-reduced-motion: reduce)");
   });
@@ -162,16 +162,18 @@ describe("public landing page", () => {
     expect(ecosystem.match(/<header[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("GitHub");
   });
 
-  it("uses one LX mark and the 0.1.7 package version", () => {
+  it("uses one LX mark asset and the 0.1.8 package version", () => {
     const mark = readFileSync(new URL("../src/client/components/BrandMark.tsx", import.meta.url), "utf8");
     const favicon = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
     const identity = readFileSync(new URL("../src/client/components/BrandIdentity.tsx", import.meta.url), "utf8");
     const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-    expect(packageJson.version).toBe("0.1.7");
-    expect(lock.version).toBe("0.1.7");
-    expect(lock.packages[""].version).toBe("0.1.7");
-    expect(mark).toContain('d="M11 8v31h13M30 9l12 30M42 9 30 39"');
+    expect(packageJson.version).toBe("0.1.8");
+    expect(lock.version).toBe("0.1.8");
+    expect(lock.packages[""].version).toBe("0.1.8");
+    expect(mark).toContain('const brandMarkSrc = "/favicon.svg"');
+    expect(mark).toContain('<img src={brandMarkSrc}');
+    expect(readFileSync(new URL("../index.html", import.meta.url), "utf8")).toContain('href="/favicon.svg"');
     expect(favicon).toContain('d="M11 8v31h13M30 9l12 30M42 9 30 39"');
     expect(identity).toContain("<BrandMark />");
     for (const path of [

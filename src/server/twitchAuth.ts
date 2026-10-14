@@ -365,7 +365,14 @@ export function twitchAuthRouter(): express.Router {
       if (!(await verifyStreamerIdentity(session.user.id, session.user.twitchUserId!))) throw new Error("Twitch identity revoked");
       const channels = await getModeratedChannels(session.user.id);
       channels.add(session.user.twitchUserId!);
-      const profiles = await getTwitchProfiles(session.user.id, [...channels]).catch(() => []);
+      let profiles: Awaited<ReturnType<typeof getTwitchProfiles>> = [];
+      try {
+        profiles = await getTwitchProfiles(session.user.id, [...channels]);
+      } catch (error) {
+        const reason = error instanceof Error && ["Twitch profiles unavailable", "Invalid Twitch profiles", "Twitch authorization revoked"].includes(error.message)
+          ? error.message : "request failed";
+        console.warn("Twitch profile lookup failed; channel names and avatars will use fallbacks", reason);
+      }
       const linked = await prisma.streamer.findMany({
         where: { twitchBroadcasterId: { in: [...channels] }, ownerUserId: { not: null } },
         select: { id: true, displayName: true, twitchLogin: true, twitchBroadcasterId: true, ownerUserId: true }
@@ -382,7 +389,7 @@ export function twitchAuthRouter(): express.Router {
             catch { status = "error"; }
           }
         }
-        result.push({ id: channel?.id ?? null, twitchId: id, displayName: profile?.displayName ?? channel?.displayName ?? id, avatarUrl: profile?.avatarUrl ?? null, status,
+        result.push({ id: channel?.id ?? null, twitchId: id, displayName: profile?.displayName ?? channel?.displayName ?? id, avatarUrl: profile?.avatarUrl || null, status,
           role: id === session.user.twitchUserId && (!channel || channel.ownerUserId === session.user.id) ? "owner" : "moderator" });
       }
       response.setHeader("Cache-Control", "no-store");

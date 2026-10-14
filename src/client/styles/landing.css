@@ -563,6 +563,8 @@
 }
 .landing-section-heading {
   max-width: 720px;
+  display: grid;
+  justify-items: start;
 }
 .landing-section-heading h2 {
   margin: 0;
@@ -681,6 +683,10 @@
   justify-content: space-between;
   gap: var(--space-5);
   padding-block: var(--space-8);
+}
+.landing-cta-copy {
+  display: grid;
+  justify-items: start;
 }
 .landing-cta .landing-eyebrow {
   margin-bottom: var(--space-4);

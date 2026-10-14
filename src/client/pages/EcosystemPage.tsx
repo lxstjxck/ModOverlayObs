@@ -60,9 +60,6 @@ function EcosystemContent() {
       <section className="ecosystem-hero landing-shell" aria-labelledby="ecosystem-title">
         <div className="ecosystem-hero-glow" aria-hidden="true" />
         <div className="ecosystem-hero-content">
-          <p className="landing-eyebrow">
-            <span className="landing-eyebrow-line" /> LXST ECOSYSTEM
-          </p>
           <h1 id="ecosystem-title">
             Всё для твоего <em>стрима.</em>
           </h1>

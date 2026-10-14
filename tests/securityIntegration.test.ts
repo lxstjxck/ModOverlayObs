@@ -404,6 +404,9 @@ it("uses one Twitch session as owner and moderator on different channels", async
     authMethod: "TWITCH", twitchMode: "unified", expiresAt: new Date(Date.now() + 3600_000) } });
   const realFetch = globalThis.fetch;
   let refreshRevoked = false;
+  let profilesUnavailable = true;
+  const profileRequests: string[][] = [];
+  const profileWarning = vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = String(input);
     if (!url.startsWith("https://")) return realFetch(input, init);
@@ -418,16 +421,33 @@ it("uses one Twitch session as owner and moderator on different channels", async
     })));
     if (url.includes("moderation/channels")) return Promise.resolve(new Response(JSON.stringify({ data: [{ broadcaster_id: "222" }], pagination: {} })));
     if (url.includes("moderation/moderators")) return Promise.resolve(new Response(JSON.stringify({ data: [{ user_id: "111" }], pagination: {} })));
-    if (url.includes("/users?")) return Promise.resolve(new Response(JSON.stringify({ data: ["111", "222"].map((id) => ({ id, login: id, display_name: id })) })));
+    if (url.includes("/users?")) {
+      profileRequests.push(new URL(url).searchParams.getAll("id"));
+      return Promise.resolve(profilesUnavailable
+        ? new Response(null, { status: 503 })
+        : new Response(JSON.stringify({ data: ["111", "222"].map((id) => ({ id, login: id,
+          display_name: id, profile_image_url: id === "111" ? "https://cdn.example/111.png" : "" })) })));
+    }
     throw new Error(`Unexpected Twitch request: ${url}`);
   });
   const cookie = headers("combined-session");
   const listed = await fetch(`${baseUrl}/api/auth/twitch/channels`, { headers: cookie });
   expect(listed.status).toBe(200);
-  expect((await listed.json() as { channels: Array<{ id: string; role: string }> }).channels).toEqual(expect.arrayContaining([
-    expect.objectContaining({ id: own.id, role: "owner" }),
-    expect.objectContaining({ id: moderated.id, role: "moderator" })
+  expect((await listed.json() as { channels: Array<{ id: string; role: string; avatarUrl: string | null }> }).channels).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: own.id, role: "owner", avatarUrl: null }),
+    expect.objectContaining({ id: moderated.id, role: "moderator", avatarUrl: null })
   ]));
+  expect(profileWarning).toHaveBeenCalledWith("Twitch profile lookup failed; channel names and avatars will use fallbacks", "Twitch profiles unavailable");
+  expect(profileRequests).toEqual([expect.arrayContaining(["111", "222"])]);
+  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: { ...cookie, "X-Channel-Id": "foreign" } })).status).toBe(403);
+  profilesUnavailable = false;
+  const refreshed = await fetch(`${baseUrl}/api/auth/twitch/channels`, { headers: cookie });
+  expect(refreshed.status).toBe(200);
+  expect((await refreshed.json() as { channels: Array<{ id: string; avatarUrl: string | null }> }).channels).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: own.id, avatarUrl: "https://cdn.example/111.png" }),
+    expect.objectContaining({ id: moderated.id, avatarUrl: null })
+  ]));
+  expect(profileRequests).toHaveLength(2);
   const ownEditor = await fetch(`${baseUrl}/api/auth/me`, { headers: { ...cookie, "X-Channel-Id": own.id } });
   const otherEditor = await fetch(`${baseUrl}/api/auth/me`, { headers: { ...cookie, "X-Channel-Id": moderated.id } });
   expect((await ownEditor.json() as { user: { role: string } }).user.role).toBe("OWNER");

@@ -5,13 +5,7 @@
 }
 
 .ecosystem-header {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  height: 84px;
-  border-bottom: 1px solid #292631;
-  background: rgba(11, 11, 14, 0.92);
-  backdrop-filter: blur(18px);
+  min-height: var(--space-8);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
@@ -40,6 +34,8 @@
   z-index: 1;
   width: 100%;
   max-width: 980px;
+  display: grid;
+  justify-items: start;
 }
 
 .ecosystem-hero h1 {
@@ -113,7 +109,7 @@
 }
 
 .ecosystem-services {
-  scroll-margin-top: 108px;
+  scroll-margin-top: var(--space-5);
   padding-block: var(--space-7) var(--space-9);
 }
 
@@ -293,15 +289,19 @@
 
 @media (max-width: 700px) {
   .ecosystem-header {
-    height: 72px;
-  }
-
-  .ecosystem-header {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
   .ecosystem-header nav {
-    display: none;
+    display: flex;
+    justify-self: end;
+  }
+
+  .ecosystem-header > .public-auth,
+  .ecosystem-header > .public-auth-status {
+    grid-column: 1 / -1;
+    justify-self: start;
+    min-width: 0;
   }
   .ecosystem-hero {
     min-height: 520px;
@@ -332,7 +332,7 @@
   }
 
   .ecosystem-services {
-    scroll-margin-top: 92px;
+    scroll-margin-top: var(--space-5);
     padding-block: 40px var(--space-8);
   }
 
@@ -367,23 +367,6 @@
   .ecosystem-service-icon svg {
     width: 42px;
     height: 42px;
-  }
-}
-
-@media (max-width: 520px) {
-  .ecosystem-header {
-    height: auto;
-    min-height: 72px;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .ecosystem-header > .public-auth,
-  .ecosystem-header > .public-auth-status {
-    justify-self: start;
-  }
-
-  .ecosystem-services {
-    scroll-margin-top: var(--space-9);
   }
 }
 

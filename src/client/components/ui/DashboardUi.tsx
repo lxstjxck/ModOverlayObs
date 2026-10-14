@@ -16,24 +16,30 @@ export function StatusPill({
 }
 
 export function ChannelAvatar({ name, src }: { name: string; src: string | null }) {
-  return src ? (
-    <img className="lxst-avatar" src={src} alt="" />
-  ) : (
+  return (
     <span className="lxst-avatar lxst-avatar-fallback" aria-hidden="true">
       {name.slice(0, 1).toUpperCase()}
+      {src && (
+        <img
+          key={src}
+          className="lxst-avatar-image"
+          src={src}
+          alt=""
+          referrerPolicy="no-referrer"
+          onError={(event) => { event.currentTarget.hidden = true; }}
+        />
+      )}
     </span>
   );
 }
 
 export function DashboardSection({
   id,
-  eyebrow,
   title,
   children,
   className = ""
 }: {
   id?: string;
-  eyebrow: string;
   title: string;
   children: ReactNode;
   className?: string;
@@ -41,7 +47,6 @@ export function DashboardSection({
   return (
     <section className={`lxst-panel ${className}`} id={id} aria-label={title}>
       <div className="lxst-panel-heading">
-        <span>{eyebrow}</span>
         <h2>{title}</h2>
       </div>
       {children}

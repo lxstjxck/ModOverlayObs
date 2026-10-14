@@ -142,7 +142,7 @@ function TwitchLandingContent() {
 
       <section className="landing-cta">
         <div className="landing-shell landing-cta-inner">
-          <div>
+          <div className="landing-cta-copy">
             <p className="landing-eyebrow">
               <Sparkles size={16} aria-hidden="true" /> ГОТОВЫ НАЧАТЬ?
             </p>

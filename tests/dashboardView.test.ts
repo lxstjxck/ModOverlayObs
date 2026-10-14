@@ -3,6 +3,7 @@ import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TwitchDashboardView } from "../src/client/components/TwitchDashboardView";
+import { ChannelAvatar } from "../src/client/components/ui/DashboardUi";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -81,6 +82,13 @@ describe("Twitch dashboard presentation", () => {
     expect(html).toContain('href="/channel/channel-1"');
     expect(html).toContain('id="obs"');
     expect(html).toContain('id="canvas"');
+    expect(html).not.toContain('href="#obs"');
+    expect(html).not.toContain('href="#moderators"');
+    expect(html).not.toContain('href="#canvas"');
+    expect(html).not.toContain('href="#tts"');
+    expect(html).not.toContain("ТРАНСЛЯЦИЯ");
+    expect(html).not.toContain("КОМАНДА");
+    expect(html).toContain('class="lxst-button lxst-button-secondary lxst-obs-reload"');
     expect(html).not.toContain("Подключить канал");
     expect(html).toContain("Статус соединения OBS Browser Source");
     expect(html).toContain("OBS подключён");
@@ -109,7 +117,7 @@ describe("Twitch dashboard presentation", () => {
     expect(html).not.toContain('id="canvas"');
     expect(html).not.toContain('href="/channel/channel-1"');
     expect(html).toContain('class="lxst-channel-card lxst-channel-card-compact"');
-    expect(html).toContain('class="lxst-channel-icon-slot"');
+    expect(html).toContain('class="lxst-avatar lxst-avatar-fallback"');
     expect(html).not.toContain("КАБИНЕТ МОДЕРАТОРА");
   });
 
@@ -117,6 +125,19 @@ describe("Twitch dashboard presentation", () => {
     const html = render({ mode: "moderator", loading: true, channels: [{ ...channel, twitchId: "other", role: "moderator" }] });
     expect(html).toContain("Открыть редактор");
     expect(html).not.toContain("Загружаем каналы…");
+  });
+
+  it("uses channel avatars with a stable letter fallback when the image is absent or fails", () => {
+    const withImage = render({ mode: "moderator", channels: [{ ...channel, twitchId: "other", avatarUrl: "https://cdn.example/avatar.png", role: "moderator" }] });
+    expect(withImage).toContain('src="https://cdn.example/avatar.png"');
+    expect(withImage).toContain('class="lxst-avatar lxst-avatar-fallback"');
+    const withoutImage = render({ mode: "moderator", channels: [{ ...channel, twitchId: "other", avatarUrl: null, role: "moderator" }] });
+    expect(withoutImage).not.toContain('src="https://cdn.example/avatar.png"');
+    const avatar = ChannelAvatar({ name: "Creator", src: "https://cdn.example/avatar.png" });
+    const image = (avatar.props.children as React.ReactNode[])[1] as React.ReactElement<{ onError: (event: { currentTarget: { hidden: boolean } }) => void }>;
+    const target = { hidden: false };
+    image.props.onError({ currentTarget: target });
+    expect(target.hidden).toBe(true);
   });
 
   it.each([

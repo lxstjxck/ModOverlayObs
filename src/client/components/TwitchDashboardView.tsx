@@ -153,14 +153,6 @@ export function TwitchDashboardView(props: DashboardProps) {
       <header className="lxst-dashboard-header">
         <div className="lxst-shell lxst-dashboard-header-inner">
           <BrandIdentity product={null} />
-          {me && mode === "streamer" && ownChannel && (
-            <nav className="lxst-dashboard-nav" aria-label="Разделы кабинета">
-              <a href="#obs">OBS</a>
-              <a href="#moderators">Модераторы</a>
-              <a href="#canvas">Холст</a>
-              <a href="#tts">TTS</a>
-            </nav>
-          )}
           {me && (
             <button className="lxst-header-logout" type="button" onClick={onLogout}>
               <LogOut size={16} aria-hidden="true" />
@@ -223,7 +215,6 @@ export function TwitchDashboardView(props: DashboardProps) {
           <div className="lxst-dashboard-grid" aria-busy={loading}>
             <DashboardSection
               id="overview"
-              eyebrow="КАНАЛ"
               title="Обзор"
               className="lxst-overview"
             >
@@ -306,7 +297,6 @@ export function TwitchDashboardView(props: DashboardProps) {
               <>
                 <DashboardSection
                   id="obs"
-                  eyebrow="ТРАНСЛЯЦИЯ"
                   title="OBS Browser Source"
                   className="lxst-obs"
                 >
@@ -357,9 +347,9 @@ export function TwitchDashboardView(props: DashboardProps) {
                           Установите размер {obs.canvasWidth} × {obs.canvasHeight}.
                         </li>
                       </ol>
-                      <button className="lxst-button lxst-button-secondary" type="button"
+                      <button className="lxst-button lxst-button-secondary lxst-obs-reload" type="button"
                         disabled={reloadBusy} onClick={onReloadOverlay}>
-                        <RefreshCw size={17} aria-hidden="true" /> Перезагрузить OBS Overlay
+                        <RefreshCw size={17} className={reloadBusy ? "spin" : undefined} aria-hidden="true" /> Перезагрузить OBS Overlay
                       </button>
                       <p className="lxst-muted" role="status">
                         {reloadMessage || (reloadStatus?.state === "waiting"
@@ -381,7 +371,6 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="moderators"
-                  eyebrow="КОМАНДА"
                   title="Модераторы"
                   className="lxst-moderators"
                 >
@@ -432,7 +421,6 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="canvas"
-                  eyebrow="КОМПОЗИЦИЯ"
                   title="Холст"
                   className="lxst-canvas"
                 >
@@ -590,7 +578,6 @@ export function TwitchDashboardView(props: DashboardProps) {
                 </DashboardSection>
                 <DashboardSection
                   id="tts"
-                  eyebrow="ОЗВУЧКА"
                   title="Twitch TTS"
                   className="lxst-tts"
                 >
@@ -706,7 +693,6 @@ export function TwitchDashboardView(props: DashboardProps) {
         ) : (
           <DashboardSection
             id="channels"
-            eyebrow="ДОСТУПНЫЕ КАНАЛЫ"
             title="Каналы модератора"
             className="lxst-channels"
           >
@@ -728,7 +714,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                 {filteredChannels.map((channel) => (
                   <article className={`lxst-channel-card ${channel.status === "unconnected" ? "lxst-channel-card-compact" : ""}`} key={channel.twitchId}>
                     <div className="lxst-channel-card-top">
-                      <span className="lxst-channel-icon-slot" aria-hidden="true" />
+                      <ChannelAvatar name={channel.displayName} src={channel.avatarUrl} />
                       <StatusPill
                         tone={
                           channel.status === "connected"
