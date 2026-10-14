@@ -1,5 +1,5 @@
-import { ArrowUpRight, Check, Copy, Eye, EyeOff, LogOut, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowUpRight, Check, Copy, Eye, EyeOff, Info, LockKeyhole, LogOut, RefreshCw, RotateCw, ShieldCheck } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type {
   CanvasChangeMode,
   ObsSetupView,
@@ -15,6 +15,8 @@ import type {
 import { moderatedTwitchChannels, ownTwitchChannel } from "../dashboardNavigation";
 import { BrandIdentity } from "./BrandIdentity";
 import { ChannelAvatar, DashboardSection, StatusPill } from "./ui/DashboardUi";
+import { LoadingSpinner } from "./ui/LoadingSpinner";
+import { OverlayReloadFeedback } from "./OverlayReloadFeedback";
 
 type DashboardProps = {
   mode: TwitchMode;
@@ -30,6 +32,10 @@ type DashboardProps = {
   reloadMessage: string;
   reloadBusy: boolean;
   onReloadOverlay: () => void;
+  onRegenerateObs: () => Promise<boolean>;
+  regeneratingObs: boolean;
+  obsLinkMessage: string;
+  obsLinkError: boolean;
   width: string;
   height: string;
   ttsCost: number;
@@ -40,12 +46,15 @@ type DashboardProps = {
   connecting: boolean;
   savingCanvas: boolean;
   ttsBusy: boolean;
-  changingModerator: string | null;
+  changingModerators: string[];
+  moderatorsRefreshing: boolean;
+  moderatorsError: string;
   error: string;
   onRefresh: () => void;
   onLogout: () => void;
   onConnectChannel: () => void;
   onToggleModerator: (moderator: TwitchModeratorView) => void;
+  onRefreshModerators: () => void;
   onToggleTts: () => void;
   onSaveTtsReward: () => void;
   onSaveCanvas: (mode: CanvasChangeMode) => void;
@@ -89,6 +98,10 @@ export function TwitchDashboardView(props: DashboardProps) {
     reloadMessage,
     reloadBusy,
     onReloadOverlay,
+    onRegenerateObs,
+    regeneratingObs,
+    obsLinkMessage,
+    obsLinkError,
     width,
     height,
     ttsCost,
@@ -99,12 +112,15 @@ export function TwitchDashboardView(props: DashboardProps) {
     connecting,
     savingCanvas,
     ttsBusy,
-    changingModerator,
+    changingModerators,
+    moderatorsRefreshing,
+    moderatorsError,
     error,
     onRefresh,
     onLogout,
     onConnectChannel,
     onToggleModerator,
+    onRefreshModerators,
     onToggleTts,
     onSaveTtsReward,
     onSaveCanvas,
@@ -116,10 +132,29 @@ export function TwitchDashboardView(props: DashboardProps) {
   const [channelQuery, setChannelQuery] = useState("");
   const [showObsUrl, setShowObsUrl] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
+  const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
+  const [showReloadHint, setShowReloadHint] = useState(false);
+  const regenerateButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelRegenerateRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setShowObsUrl(false);
     setCopyStatus("");
   }, [obs?.overlayUrl]);
+  useEffect(() => {
+    if (showRegenerateDialog) cancelRegenerateRef.current?.focus();
+  }, [showRegenerateDialog]);
+  function closeRegenerateDialog() {
+    if (regeneratingObs) return;
+    setShowRegenerateDialog(false);
+    regenerateButtonRef.current?.focus();
+  }
+  async function confirmRegenerate() {
+    if (regeneratingObs) return;
+    if (await onRegenerateObs()) {
+      setShowRegenerateDialog(false);
+      regenerateButtonRef.current?.focus();
+    }
+  }
   const streamerChannel = me ? ownTwitchChannel(channels, me.id) : null;
   const ownChannel = mode === "streamer" && streamerChannel?.status === "connected" && streamerChannel.id
     ? streamerChannel : null;
@@ -188,8 +223,8 @@ export function TwitchDashboardView(props: DashboardProps) {
                 onClick={onRefresh}
                 disabled={loading}
               >
-                <RefreshCw size={15} className={loading ? "spin" : ""} aria-hidden="true" />
-                {loading ? "Обновляем…" : "Обновить"}
+                {loading ? <LoadingSpinner /> : <RefreshCw size={15} aria-hidden="true" />}
+                {loading ? "Обновляем данные…" : "Обновить данные"}
               </button>
             </div>
           )}
@@ -201,7 +236,7 @@ export function TwitchDashboardView(props: DashboardProps) {
         )}
         {!me ? (
           <div className="lxst-panel lxst-loading" role="status">
-            <RefreshCw className="spin" size={22} aria-hidden="true" /> Проверяем вход через Twitch…
+            <LoadingSpinner /> Проверяем вход через Twitch…
           </div>
         ) : mode === "streamer" ? (
           <div className="lxst-dashboard-grid" aria-busy={loading}>
@@ -268,7 +303,7 @@ export function TwitchDashboardView(props: DashboardProps) {
                         disabled={connecting}
                         onClick={onConnectChannel}
                       >
-                        {connecting ? "Подключаем…" : "Подключить канал"}
+                        {connecting && <LoadingSpinner />}{connecting ? "Подключаем…" : "Подключить канал"}
                       </button>
                     ) : (
                       <p className="lxst-muted">
@@ -323,8 +358,20 @@ export function TwitchDashboardView(props: DashboardProps) {
                           >
                             <Copy size={17} />
                           </button>
+                          <button
+                            ref={regenerateButtonRef}
+                            type="button"
+                            className="lxst-icon-button"
+                            aria-label="Создать новую ссылку OBS"
+                            title="Создать новую ссылку OBS"
+                            onClick={() => setShowRegenerateDialog(true)}
+                            disabled={regeneratingObs}
+                          >
+                            {regeneratingObs ? <LoadingSpinner /> : <RotateCw size={17} aria-hidden="true" />}
+                          </button>
                         </div>
                       </label>
+                      {obsLinkMessage && <p className="lxst-obs-link-message" role={obsLinkError ? "alert" : "status"}>{obsLinkMessage}</p>}
                       <span className="lxst-copy-status" role="status">
                         {copyStatus && (
                           <>
@@ -339,19 +386,21 @@ export function TwitchDashboardView(props: DashboardProps) {
                           Установите размер {obs.canvasWidth} × {obs.canvasHeight}.
                         </li>
                       </ol>
-                      <button className="lxst-button lxst-button-secondary lxst-obs-reload" type="button"
-                        disabled={reloadBusy} onClick={onReloadOverlay}>
-                        <RefreshCw size={17} className={reloadBusy ? "spin" : undefined} aria-hidden="true" /> Перезагрузить OBS Overlay
-                      </button>
-                      <p className="lxst-muted" role="status">
-                        {reloadMessage || (reloadStatus?.state === "waiting"
-                          ? `Команда получена: ${reloadStatus.received} из ${reloadStatus.total}. Переподключились и получили состояние: ${reloadStatus.reconnected} из ${reloadStatus.total}.`
-                          : reloadStatus?.state === "completed"
-                            ? `OBS Overlay переподключён и синхронизирован: ${reloadStatus.reconnected} из ${reloadStatus.total}.`
-                            : reloadStatus?.state === "timed_out"
-                              ? `Время ожидания истекло. Команду получили ${reloadStatus.received} из ${reloadStatus.total}, переподключились ${reloadStatus.reconnected}. Если Browser Source завис, удалённая команда не поможет: перезагрузите источник в OBS вручную.`
-                              : "Если Browser Source не отвечает, перезагрузите источник в OBS вручную.")}
-                      </p>
+                      <div className="lxst-obs-reload-row">
+                        <button className="lxst-button lxst-button-secondary lxst-obs-reload" type="button"
+                          disabled={reloadBusy} onClick={onReloadOverlay}>
+                          {reloadBusy ? <LoadingSpinner /> : <RefreshCw size={17} aria-hidden="true" />} Перезагрузить OBS Overlay
+                        </button>
+                        <button type="button" className="lxst-info-button" aria-label="Помощь при зависании Browser Source"
+                          aria-expanded={showReloadHint} onClick={() => setShowReloadHint((value) => !value)}
+                          onBlur={() => setShowReloadHint(false)}>
+                          <Info size={16} aria-hidden="true" />
+                        </button>
+                        <span className={`lxst-info-tooltip ${showReloadHint ? "lxst-info-tooltip-open" : ""}`} role="tooltip">
+                          Если Browser Source не отвечает, перезагрузите источник в OBS вручную.
+                        </span>
+                      </div>
+                      <OverlayReloadFeedback status={reloadStatus} message={reloadMessage} />
                     </>
                   ) : (
                     <p className="lxst-muted" role="status">
@@ -365,10 +414,14 @@ export function TwitchDashboardView(props: DashboardProps) {
                   id="moderators"
                   title="Модераторы"
                   className="lxst-moderators"
+                  action={<button type="button" className="lxst-quiet-button lxst-moderators-refresh"
+                    onClick={onRefreshModerators} disabled={moderatorsRefreshing}>
+                    {moderatorsRefreshing ? <LoadingSpinner /> : <RefreshCw size={15} aria-hidden="true" />}
+                    {moderatorsRefreshing ? "Обновляем список…" : "Обновить список"}
+                  </button>}
                 >
-                  <p className="lxst-muted">
-                    Список действующих Twitch-модераторов. Доступ можно отозвать или вернуть.
-                  </p>
+                  {moderatorsError && <p className="lxst-alert" role="alert">{moderatorsError}</p>}
+                  <span className="lxst-sr-only" role="status">{moderatorsRefreshing ? "Обновляем список модераторов…" : ""}</span>
                   <label className="lxst-field lxst-search-field">
                     Поиск модератора
                     <input
@@ -380,26 +433,19 @@ export function TwitchDashboardView(props: DashboardProps) {
                   </label>
                   <div className="lxst-list">
                     {filteredModerators.map((item) => (
-                      <div className="lxst-list-row" key={item.id}>
+                      <div className={`lxst-list-row lxst-moderator-card ${item.banned ? "lxst-moderator-denied" : "lxst-moderator-allowed"}`} key={item.id}>
                         <div className="lxst-list-person">
                           <ChannelAvatar name={item.displayName} src={item.twitchAvatarUrl} />
                           <strong>{item.displayName}</strong>
                         </div>
-                        <label className="lxst-access-toggle">
-                          <input
-                            type="checkbox"
-                            checked={!item.banned}
-                            disabled={changingModerator !== null}
-                            onChange={() => onToggleModerator(item)}
-                          />
-                          <span>
-                            {changingModerator === item.id
-                              ? "Обновляем…"
-                              : item.banned
-                                ? "Доступ запрещён"
-                                : "Доступ разрешён"}
-                          </span>
-                        </label>
+                        <button type="button" className="lxst-access-toggle" aria-pressed={!item.banned}
+                          aria-label={`${item.banned ? "Разрешить" : "Запретить"} доступ модератору ${item.displayName}`}
+                          disabled={changingModerators.includes(item.id)} onClick={() => onToggleModerator(item)}>
+                          {changingModerators.includes(item.id) ? <LoadingSpinner /> : item.banned
+                            ? <LockKeyhole size={17} aria-hidden="true" />
+                            : <ShieldCheck size={17} aria-hidden="true" />}
+                          <span>{item.banned ? "Доступ запрещён" : "Доступ разрешён"}</span>
+                        </button>
                       </div>
                     ))}
                     {filteredModerators.length === 0 && (
@@ -714,6 +760,30 @@ export function TwitchDashboardView(props: DashboardProps) {
           </DashboardSection>
         )}
       </div>
+      {showRegenerateDialog && <div className="lxst-dialog-backdrop">
+        <div className="lxst-dialog" role="dialog" aria-modal="true" aria-labelledby="lxst-regenerate-title"
+          aria-describedby="lxst-regenerate-description" onKeyDown={(event) => {
+            if (event.key === "Escape") closeRegenerateDialog();
+            if (event.key === "Tab") {
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"));
+              if (event.shiftKey && document.activeElement === buttons[0]) {
+                event.preventDefault(); buttons.at(-1)?.focus();
+              } else if (!event.shiftKey && document.activeElement === buttons.at(-1)) {
+                event.preventDefault(); buttons[0]?.focus();
+              }
+            }
+          }}>
+          <h2 id="lxst-regenerate-title">Создать новую ссылку OBS?</h2>
+          <p id="lxst-regenerate-description">Старая ссылка сразу перестанет работать. После подтверждения необходимо заменить URL источника Browser Source в OBS.</p>
+          {obsLinkError && obsLinkMessage && <p className="lxst-alert" role="alert">{obsLinkMessage}</p>}
+          <div className="lxst-dialog-actions">
+            <button ref={cancelRegenerateRef} type="button" className="lxst-button lxst-button-secondary"
+              onClick={closeRegenerateDialog} disabled={regeneratingObs}>Отмена</button>
+            <button type="button" className="lxst-button lxst-button-primary" onClick={() => void confirmRegenerate()}
+              disabled={regeneratingObs}>{regeneratingObs && <LoadingSpinner />}Создать новую ссылку</button>
+          </div>
+        </div>
+      </div>}
     </main>
   );
 }

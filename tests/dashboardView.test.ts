@@ -40,6 +40,10 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     },
     presence: { overlayConnected: true, overlayCount: 1, moderators: [] },
     tts: null,
+    onRegenerateObs: async () => true,
+    regeneratingObs: false,
+    obsLinkMessage: "",
+    obsLinkError: false,
     width: "1920",
     height: "1080",
     ttsCost: 1000,
@@ -50,12 +54,15 @@ function render(overrides: Partial<ComponentProps<typeof TwitchDashboardView>> =
     connecting: false,
     savingCanvas: false,
     ttsBusy: false,
-    changingModerator: null,
+    changingModerators: [],
+    moderatorsRefreshing: false,
+    moderatorsError: "",
     error: "",
     onRefresh: () => {},
     onLogout: () => {},
     onConnectChannel: () => {},
     onToggleModerator: () => {},
+    onRefreshModerators: () => {},
     onToggleTts: () => {},
     onSaveTtsReward: () => {},
     onSaveCanvas: () => {},
@@ -121,6 +128,30 @@ describe("Twitch dashboard presentation", () => {
     expect(html).not.toContain("OBS Width");
     expect(html).not.toContain("OBS Height");
     expect(html).not.toContain("lxst-source-size");
+  });
+
+  it("shows confirmed moderator access as keyboard buttons and a separate list refresh", () => {
+    const html = render({ moderators: [
+      { id: "allowed", twitchUserId: "101", displayName: "Allowed", twitchAvatarUrl: null, banned: false },
+      { id: "denied", twitchUserId: "102", displayName: "Denied", twitchAvatarUrl: null, banned: true }
+    ] });
+    expect(html).toContain("Обновить данные");
+    expect(html).toContain("Обновить список");
+    expect(html).toContain('aria-pressed="true" aria-label="Запретить доступ модератору Allowed"');
+    expect(html).toContain('aria-pressed="false" aria-label="Разрешить доступ модератору Denied"');
+    expect(html).toContain("lxst-moderator-allowed");
+    expect(html).toContain("lxst-moderator-denied");
+    expect(html).not.toContain('type="checkbox"');
+    expect(html).not.toContain("Список действующих Twitch-модераторов");
+  });
+
+  it("keeps the OBS URL protected and exposes renewal through a confirmation trigger", () => {
+    const html = render();
+    expect(html).toContain('aria-label="Создать новую ссылку OBS"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain('aria-label="Помощь при зависании Browser Source"');
+    expect(html).not.toContain('role="dialog"');
+    expect(html).not.toContain("Если Browser Source не отвечает, перезагрузите источник в OBS вручную.</p>");
   });
 
   it("offers connection for a selected owner whose Twitch channel is not connected", () => {

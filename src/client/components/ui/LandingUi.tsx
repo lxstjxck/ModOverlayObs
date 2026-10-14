@@ -24,19 +24,16 @@ export function ActionLink({
 }
 
 export function SectionHeading({
-  eyebrow,
   title,
   children,
   id
 }: {
-  eyebrow: string;
   title: string;
   children?: ReactNode;
   id?: string;
 }) {
   return (
     <div className="landing-section-heading">
-      <p className="landing-eyebrow">{eyebrow}</p>
       <h2 id={id}>{title}</h2>
       {children && <p className="landing-section-description">{children}</p>}
     </div>

@@ -37,17 +37,20 @@ export function DashboardSection({
   id,
   title,
   children,
-  className = ""
+  className = "",
+  action
 }: {
   id?: string;
   title: string;
   children: ReactNode;
   className?: string;
+  action?: ReactNode;
 }) {
   return (
     <section className={`lxst-panel ${className}`} id={id} aria-label={title}>
       <div className="lxst-panel-heading">
         <h2>{title}</h2>
+        {action}
       </div>
       {children}
     </section>

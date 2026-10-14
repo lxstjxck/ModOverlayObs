@@ -1,9 +1,8 @@
-import { ArrowDown, AudioLines, Image, LockKeyhole, MonitorPlay, Smile, Sparkles } from "lucide-react";
+import { ArrowDown, AudioLines, Image, LockKeyhole, Smile } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import type {
   ObsSetupView,
-  OverlayReloadStatus,
   PresenceState,
   CanvasChangeMode,
   StreamerView,
@@ -16,10 +15,13 @@ import { ApiError, api } from "../api";
 import { dashboardMode, dashboardUrl, ownTwitchChannel } from "../dashboardNavigation";
 import { BrandIdentity } from "../components/BrandIdentity";
 import { LandingEditorDemo } from "../components/LandingEditorDemo";
+import { LandingOverlayReload } from "../components/LandingOverlayReload";
 import { PublicFooter } from "../components/PublicFooter";
 import { PublicAuthControls } from "../components/PublicAuthControls";
 import { PublicAuthProvider } from "../publicTwitchAuth";
 import { TwitchDashboardView } from "../components/TwitchDashboardView";
+import { useOverlayReload } from "../components/useOverlayReload";
+import { LoadingScreen } from "../components/ui/LoadingSpinner";
 import { FeatureCard, SectionHeading } from "../components/ui/LandingUi";
 
 type TwitchMe = { user: TwitchProfileView; csrfToken: string };
@@ -52,9 +54,6 @@ function TwitchLandingContent() {
 
       <section className="landing-hero landing-shell" aria-labelledby="landing-title">
         <div className="landing-hero-copy">
-          <p className="landing-eyebrow">
-            <span className="landing-eyebrow-line" /> ИНСТРУМЕНТ ДЛЯ ЖИВОГО ЭФИРА
-          </p>
           <h1 id="landing-title">
             Твой эфир.
             <br />
@@ -66,9 +65,6 @@ function TwitchLandingContent() {
           </p>
           <div className="landing-hero-actions">
             <PublicAuthControls />
-            <a className="landing-text-link" href="/login">
-              Я модератор <span aria-hidden="true">↗</span>
-            </a>
           </div>
           <a className="landing-scroll-link" href="#how-it-works">
             <ArrowDown size={15} aria-hidden="true" /> Узнать больше
@@ -84,7 +80,6 @@ function TwitchLandingContent() {
         <div className="landing-shell">
           <SectionHeading
             id="how-title"
-            eyebrow="ПРОСТОЕ ПОДКЛЮЧЕНИЕ"
             title="От входа до эфира — несколько шагов."
           >
             Стример подключает канал, а команда получает удобное пространство для работы с оверлеем.
@@ -113,7 +108,6 @@ function TwitchLandingContent() {
       >
         <SectionHeading
           id="features-title"
-          eyebrow="ВОЗМОЖНОСТИ"
           title="Эфир становится живее."
         >
           Всё необходимое для совместной работы с контентом на трансляции.
@@ -132,20 +126,11 @@ function TwitchLandingContent() {
             Подключайте озвучивание сообщений из чата через команду или награду за баллы канала.
           </FeatureCard>
         </div>
-        <div className="landing-note">
-          <MonitorPlay size={18} aria-hidden="true" />
-          <span>
-            Предпросмотр помогает подготовить сцену. OBS показывает живое состояние оверлея.
-          </span>
-        </div>
       </section>
 
       <section className="landing-cta">
         <div className="landing-shell landing-cta-inner">
           <div className="landing-cta-copy">
-            <p className="landing-eyebrow">
-              <Sparkles size={16} aria-hidden="true" /> ГОТОВЫ НАЧАТЬ?
-            </p>
             <h2>
               Дайте эфиру
               <br />
@@ -155,7 +140,7 @@ function TwitchLandingContent() {
           </div>
           <div className="landing-cta-actions">
             <PublicAuthControls />
-            <a href="/login">Вход для модератора ↗</a>
+            <LandingOverlayReload />
           </div>
         </div>
       </section>
@@ -166,6 +151,8 @@ function TwitchLandingContent() {
 
 export function TwitchDashboardPage() {
   const [me, setMe] = useState<TwitchMe | null>(null);
+  const [initialError, setInitialError] = useState("");
+  const [sessionRetry, setSessionRetry] = useState(0);
   const [channels, setChannels] = useState<TwitchChannelView[]>([]);
   const [mode, setMode] = useState(() => dashboardMode(window.location));
   const ownProfile = me ? ownTwitchChannel(channels, me.user.id) : null;
@@ -180,17 +167,26 @@ export function TwitchDashboardPage() {
   const [presence, setPresence] = useState<PresenceState | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [changingModerator, setChangingModerator] = useState<string | null>(null);
+  const [changingModerators, setChangingModerators] = useState<string[]>([]);
+  const pendingModeratorIds = useRef(new Set<string>());
+  const [moderatorsRefreshing, setModeratorsRefreshing] = useState(false);
+  const [moderatorsError, setModeratorsError] = useState("");
+  const moderatorRequestId = useRef(0);
+  const moderatorMutationRevision = useRef(0);
+  const refreshModeratorsInFlight = useRef(false);
   const [connecting, setConnecting] = useState(false);
   const [tts, setTts] = useState<TtsSetupView | null>(null);
   const [ttsCost, setTtsCost] = useState(1000);
   const [ttsBusy, setTtsBusy] = useState(false);
-  const [reloadStatus, setReloadStatus] = useState<OverlayReloadStatus | null>(null);
-  const [reloadMessage, setReloadMessage] = useState("");
-  const [reloadStarting, setReloadStarting] = useState(false);
+  const [regeneratingObs, setRegeneratingObs] = useState(false);
+  const regenerateInFlight = useRef(false);
+  const [obsLinkMessage, setObsLinkMessage] = useState("");
+  const [obsLinkError, setObsLinkError] = useState(false);
 
   async function load(userId = me?.user.id) {
     const revision = ++loadRevision.current;
+    const moderatorRevision = ++moderatorRequestId.current;
+    const mutationRevision = moderatorMutationRevision.current;
     let loadedChannels: TwitchChannelView[] | null = null;
     setLoading(true);
     setError("");
@@ -214,7 +210,9 @@ export function TwitchDashboardPage() {
         canvasRevisionRef.current = current.streamer.canvasRevision;
         setWidth(String(current.streamer.canvasWidth));
         setHeight(String(current.streamer.canvasHeight));
-        setModerators(list.moderators);
+        if (moderatorRevision === moderatorRequestId.current && mutationRevision === moderatorMutationRevision.current) {
+          setModerators(list.moderators);
+        }
         setTts(ttsView);
         setTtsCost(ttsView.rewardCost);
       } else {
@@ -224,7 +222,6 @@ export function TwitchDashboardPage() {
         setPresence(null);
         setModerators([]);
         setTts(null);
-        setReloadStatus(null);
       }
     } catch (loadError) {
       if (revision !== loadRevision.current) return;
@@ -241,13 +238,20 @@ export function TwitchDashboardPage() {
   }
 
   useEffect(() => {
+    setInitialError("");
     void api<TwitchMe>("/api/auth/twitch/me")
       .then((value) => {
         setMe(value);
         void load(value.user.id);
       })
-      .catch(() => window.location.replace("/"));
-  }, []);
+      .catch((cause: unknown) => {
+        if (cause instanceof ApiError && cause.status === 401) {
+          window.location.replace("/overlay");
+        } else {
+          setInitialError(cause instanceof Error ? cause.message : "Не удалось проверить вход через Twitch.");
+        }
+      });
+  }, [sessionRetry]);
 
   useEffect(() => {
     const onPopState = () => setMode(dashboardMode(window.location));
@@ -257,6 +261,9 @@ export function TwitchDashboardPage() {
 
   const ownChannel =
     ownProfile?.status === "connected" && ownProfile.id ? ownProfile : null;
+  const ownChannelIdRef = useRef<string | null>(null);
+  ownChannelIdRef.current = ownChannel?.id ?? null;
+  const overlayReload = useOverlayReload(ownChannel?.id ?? null);
   useEffect(() => {
     if (!me) return;
     let mounted = true;
@@ -322,37 +329,54 @@ export function TwitchDashboardPage() {
     };
   }, [ownChannel?.id]);
 
-  useEffect(() => {
-    if (!ownChannel?.id || reloadStatus?.state !== "waiting") return;
-    const channelId = ownChannel.id;
-    const operationId = reloadStatus.id;
-    let active = true;
-    const timer = window.setInterval(() => {
-      void api<OverlayReloadStatus>(`/api/auth/twitch/channels/${encodeURIComponent(channelId)}/overlay-reload/${encodeURIComponent(operationId)}`)
-        .then((status) => { if (active) { setReloadStatus(status); setReloadMessage(""); } })
-        .catch(() => { if (active) setReloadMessage("Не удалось получить статус перезагрузки. Проверьте подключение OBS."); });
-    }, 1000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [ownChannel?.id, reloadStatus?.id, reloadStatus?.state]);
-
-  async function reloadOverlay() {
-    if (!ownChannel?.id || reloadStarting || reloadStatus?.state === "waiting") return;
-    setReloadStarting(true);
-    setReloadMessage("");
+  async function regenerateObs(): Promise<boolean> {
+    if (!ownChannel?.id || regenerateInFlight.current) return false;
+    regenerateInFlight.current = true;
+    setRegeneratingObs(true);
+    setObsLinkMessage("");
     try {
-      const status = await api<OverlayReloadStatus>(
-        `/api/auth/twitch/channels/${encodeURIComponent(ownChannel.id)}/overlay-reload`,
-        { method: "POST" }
-      );
-      setReloadStatus(status);
-    } catch (reloadError) {
-      setReloadMessage(reloadError instanceof ApiError && reloadError.status === 503
-        ? "OBS Overlay сейчас не подключён. Откройте Browser Source в OBS и повторите попытку."
-        : reloadError instanceof ApiError && reloadError.status === 409
-          ? "Перезагрузка уже выполняется или команда была отправлена недавно. Подождите и повторите попытку."
-          : reloadError instanceof Error ? reloadError.message : "Не удалось отправить команду OBS");
+      const updated = await api<ObsSetupView>("/api/obs/regenerate", {
+        method: "POST", headers: { "X-Channel-Id": ownChannel.id }
+      });
+      if (ownChannelIdRef.current !== ownChannel.id) return false;
+      setObs(updated);
+      overlayReload.reset();
+      setObsLinkError(false);
+      setObsLinkMessage("Новая ссылка создана. Замените URL источника Browser Source в OBS.");
+      return true;
+    } catch (cause) {
+      setObsLinkError(true);
+      setObsLinkMessage(cause instanceof Error ? cause.message : "Не удалось создать новую ссылку OBS.");
+      return false;
     } finally {
-      setReloadStarting(false);
+      regenerateInFlight.current = false;
+      setRegeneratingObs(false);
+    }
+  }
+
+  async function refreshModerators() {
+    if (!ownChannel?.id || refreshModeratorsInFlight.current) return;
+    const channelId = ownChannel.id;
+    const requestId = ++moderatorRequestId.current;
+    const mutationRevision = moderatorMutationRevision.current;
+    refreshModeratorsInFlight.current = true;
+    setModeratorsRefreshing(true);
+    setModeratorsError("");
+    try {
+      const list = await api<{ moderators: TwitchModeratorView[] }>(
+        `/api/auth/twitch/channels/${encodeURIComponent(channelId)}/moderators`
+      );
+      if (ownChannelIdRef.current === channelId && moderatorRequestId.current === requestId &&
+          moderatorMutationRevision.current === mutationRevision) {
+        setModerators(list.moderators);
+      }
+    } catch (cause) {
+      if (ownChannelIdRef.current === channelId) {
+        setModeratorsError(cause instanceof Error ? cause.message : "Не удалось обновить список модераторов.");
+      }
+    } finally {
+      refreshModeratorsInFlight.current = false;
+      setModeratorsRefreshing(false);
     }
   }
 
@@ -384,20 +408,33 @@ export function TwitchDashboardPage() {
   const changed = canvas && (canvas.canvasWidth !== Number(width) || canvas.canvasHeight !== Number(height));
 
   async function toggle(moderator: TwitchModeratorView) {
-    if (!ownChannel?.id || changingModerator) return;
-    setChangingModerator(moderator.id);
+    if (!ownChannel?.id || pendingModeratorIds.current.has(moderator.id)) return;
+    const channelId = ownChannel.id;
+    pendingModeratorIds.current.add(moderator.id);
+    setChangingModerators([...pendingModeratorIds.current]);
+    setModeratorsError("");
     try {
       await api(
-        `/api/auth/twitch/channels/${encodeURIComponent(ownChannel.id)}/bans/${encodeURIComponent(moderator.id)}`,
+        `/api/auth/twitch/channels/${encodeURIComponent(channelId)}/bans/${encodeURIComponent(moderator.id)}`,
         { method: moderator.banned ? "DELETE" : "PUT" }
       );
-      setModerators((items) =>
-        items.map((item) => (item.id === moderator.id ? { ...item, banned: !item.banned } : item))
-      );
+      if (ownChannelIdRef.current === channelId) {
+        moderatorMutationRevision.current++;
+        setModerators((items) =>
+          items.map((item) => (item.id === moderator.id ? { ...item, banned: !moderator.banned } : item))
+        );
+      }
     } catch (changeError) {
-      setError(changeError instanceof Error ? changeError.message : "Не удалось изменить доступ");
+      if (ownChannelIdRef.current === channelId) {
+        setModeratorsError(changeError instanceof ApiError && changeError.status === 403
+          ? "Не удалось подтвердить доступ к этому модератору. Обновите список."
+          : changeError instanceof ApiError && changeError.status === 503
+            ? "Twitch сейчас недоступен. Повторите попытку позже."
+            : changeError instanceof Error ? changeError.message : "Не удалось изменить доступ");
+      }
     } finally {
-      setChangingModerator(null);
+      pendingModeratorIds.current.delete(moderator.id);
+      setChangingModerators([...pendingModeratorIds.current]);
     }
   }
 
@@ -448,15 +485,26 @@ export function TwitchDashboardPage() {
     }
   }
 
+  if (!me) {
+    if (!initialError) return <LoadingScreen message="Проверяем вход через Twitch…" />;
+    return <main className="lxst-loading-screen">
+      <p role="alert">{initialError}</p>
+      <button type="button" onClick={() => setSessionRetry((value) => value + 1)}>Повторить проверку</button>
+    </main>;
+  }
+
   return <TwitchDashboardView
     mode={mode} me={me?.user ?? null} channels={channels} moderators={moderators}
     obs={obs} canvas={canvas} presence={presence} tts={tts}
-    reloadStatus={reloadStatus} reloadMessage={reloadMessage} reloadBusy={reloadStarting || reloadStatus?.state === "waiting"}
-    onReloadOverlay={() => void reloadOverlay()}
+    reloadStatus={overlayReload.status} reloadMessage={overlayReload.message} reloadBusy={overlayReload.busy}
+    onReloadOverlay={() => void overlayReload.reload()}
+    onRegenerateObs={regenerateObs} regeneratingObs={regeneratingObs}
+    obsLinkMessage={obsLinkMessage} obsLinkError={obsLinkError}
     width={width} height={height}
     ttsCost={ttsCost} ratio={ratio} changed={Boolean(changed)} dimensionsValid={dimensionsValid}
     loading={loading} connecting={connecting} savingCanvas={savingCanvas} ttsBusy={ttsBusy}
-    changingModerator={changingModerator} error={error}
+    changingModerators={changingModerators} moderatorsRefreshing={moderatorsRefreshing}
+    moderatorsError={moderatorsError} error={error}
     onSelectMode={(nextMode) => {
       if (nextMode === mode) return;
       window.history.pushState(null, "", dashboardUrl(nextMode));
@@ -464,6 +512,7 @@ export function TwitchDashboardPage() {
     }}
     onRefresh={() => void load()} onLogout={() => void logout()}
     onConnectChannel={() => void connectChannel()} onToggleModerator={(item) => void toggle(item)}
+    onRefreshModerators={() => void refreshModerators()}
     onToggleTts={() => void toggleTts()} onSaveTtsReward={() => void saveTtsReward()}
     onSaveCanvas={(changeMode) => void saveCanvas(changeMode)}
     setWidth={setWidth} setHeight={setHeight} setTtsCost={setTtsCost}

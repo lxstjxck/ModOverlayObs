@@ -62,15 +62,11 @@
 }
 .landing-header nav a,
 .landing-header-login,
-.landing-text-link,
-.landing-cta-actions > a:last-child,
 .landing-footer a {
   transition: color var(--ui-duration-fast) ease;
 }
 .landing-header nav a:hover,
 .landing-header-login:hover,
-.landing-text-link:hover,
-.landing-cta-actions > a:last-child:hover,
 .landing-footer a:hover {
   color: var(--ui-accent-strong);
 }
@@ -221,15 +217,6 @@
   background: var(--ui-surface);
   color: var(--ui-ink) !important;
   box-shadow: none;
-}
-.landing-text-link {
-  color: #c7c5d0 !important;
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-.landing-text-link span {
-  color: var(--ui-accent);
 }
 .landing-scroll-link {
   display: inline-flex;
@@ -660,18 +647,6 @@
   font-size: 13px;
   line-height: 1.75;
 }
-.landing-note {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: var(--space-5);
-  color: #92909d;
-  font-size: 12px;
-}
-.landing-note svg {
-  flex: none;
-  color: var(--ui-accent);
-}
 .landing-cta {
   border-block: 1px solid #332b40;
   background: radial-gradient(circle at 80% 50%, #2c213b, #141019 45%, #0d0c10 90%);
@@ -687,9 +662,6 @@
 .landing-cta-copy {
   display: grid;
   justify-items: start;
-}
-.landing-cta .landing-eyebrow {
-  margin-bottom: var(--space-4);
 }
 .landing-cta h2 {
   margin: 0;
@@ -708,11 +680,23 @@
   align-items: flex-start;
   gap: 16px;
 }
-.landing-cta-actions > a:last-child {
-  padding-left: 4px;
-  color: #bdb8c8;
-  font-size: 12px;
+.landing-reload-control { max-width: 350px; }
+.landing-reload-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--ui-border-accent);
+  border-radius: var(--ui-radius-sm);
+  background: #251d30;
+  color: #eee7f7;
+  cursor: pointer;
 }
+.landing-reload-button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.landing-reload-button:disabled { cursor: wait; opacity: 0.7; }
+.landing-reload-status { display: flex; align-items: center; gap: 8px; color: var(--ui-muted); font-size: 12px; }
+.landing-reload-status button { color: var(--ui-accent-strong); }
 .landing-footer {
   min-height: 100px;
   display: flex;

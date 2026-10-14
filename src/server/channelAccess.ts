@@ -254,6 +254,10 @@ export async function canAccessChannel(session: Session & { user: { id: string; 
 export async function setModeratorBan(channelId: string, ownerUserId: string, moderatorUserId: string, banned: boolean): Promise<void> {
   const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true } });
   if (channel?.ownerUserId !== ownerUserId || moderatorUserId === ownerUserId) throw new Error("Permission denied");
+  const moderator = await prisma.user.findUnique({ where: { id: moderatorUserId }, select: { twitchUserId: true } });
+  if (!moderator?.twitchUserId || !(await syncModerators(channelId)).has(moderator.twitchUserId)) {
+    throw new Error("Permission denied");
+  }
   if (banned) await prisma.channelModeratorBan.upsert({ where: { channelId_userId: { channelId, userId: moderatorUserId } }, create: { channelId, userId: moderatorUserId }, update: {} });
   else await prisma.channelModeratorBan.deleteMany({ where: { channelId, userId: moderatorUserId } });
   accessRevocation.emit("channelUser", channelId, moderatorUserId);

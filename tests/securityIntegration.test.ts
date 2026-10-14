@@ -137,6 +137,33 @@ function upload(token = "owner-session", bytes = png, filename = "test.png") {
   return fetch(`${baseUrl}/api/media`, { method: "POST", headers: headers(token), body: data });
 }
 
+async function bindTestTwitchOwner(channelId = streamerId, sessionToken = "rotation-owner-session") {
+  const twitchId = "rotation-owner";
+  const user = await prisma.user.create({ data: {
+    username: `twitch:${twitchId}`, displayName: "Twitch owner", passwordHash: "!", twitchUserId: twitchId
+  } });
+  await prisma.twitchOAuthConnection.create({ data: {
+    userId: user.id, mode: "unified", encryptedAccess: encryptOAuthToken("rotation-access"),
+    encryptedRefresh: encryptOAuthToken("rotation-refresh"),
+    scopesJson: JSON.stringify(["moderation:read", "user:read:moderated_channels"]),
+    expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date()
+  } });
+  await prisma.session.create({ data: {
+    userId: user.id, tokenHash: hashSessionToken(sessionToken), authMethod: "TWITCH",
+    twitchMode: "unified", expiresAt: new Date(Date.now() + 3600_000)
+  } });
+  await prisma.streamer.update({ where: { id: channelId }, data: { ownerUserId: user.id, twitchBroadcasterId: twitchId } });
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    if (String(input) === "https://id.twitch.tv/oauth2/validate") {
+      return Promise.resolve(new Response(JSON.stringify({ client_id: config.twitchClientId,
+        user_id: twitchId, scopes: ["moderation:read", "user:read:moderated_channels"] })));
+    }
+    return realFetch(input, init);
+  });
+  return { user, sessionToken };
+}
+
 it("uses validated intrinsic dimensions for a new preview without changing live state", async () => {
   const uploaded = await upload();
   expect(uploaded.status).toBe(201);
@@ -523,7 +550,7 @@ it(
       headers: { Cookie: "mod_overlay_twitch_state=wrong" },
       redirect: "manual"
     });
-    expect(invalid.headers.get("location")).toBe("/login?oauth_error=invalid_state");
+    expect(invalid.headers.get("location")).toBe("/overlay?oauth_error=invalid_state");
     const result = await fetch(callback, { headers: { Cookie: stateCookie }, redirect: "manual" });
     expect(result.status).toBe(303);
     expect(result.headers.get("location")).toBe("/channels");
@@ -556,7 +583,7 @@ it(
       (await fetch(callback, { headers: { Cookie: stateCookie }, redirect: "manual" })).headers.get(
         "location"
       )
-    ).toBe("/login?oauth_error=invalid_state");
+    ).toBe("/overlay?oauth_error=invalid_state");
     expect(twitchCalls.filter((call) => call.url.endsWith("/token"))).toHaveLength(1);
     expect(new URLSearchParams(String(twitchCalls[0].init?.body)).get("redirect_uri")).toBe(
       config.twitchOAuthRedirectUri
@@ -710,6 +737,8 @@ it("creates two independent Twitch channels and isolates moderators, OBS, media 
   expect(obs.status).toBe(200);
   expect(JSON.stringify(await obs.json())).toContain(a.overlayToken);
   expect((await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("mod-a"), "X-Channel-Id": firstId } })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/obs/regenerate`, { method: "POST", headers: { ...headers("mod-a"), "X-Channel-Id": firstId } })).status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/obs/regenerate`, { method: "POST", headers: { ...headers("stream-b"), "X-Channel-Id": firstId } })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/moderators`, { headers: headers("mod-a") })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/overlay-reload`, { method: "POST", headers: headers("mod-a") })).status).toBe(403);
   expect((await fetch(`${baseUrl}/api/tts/channels/${firstId}`, { headers: headers("mod-a") })).status).toBe(404);
@@ -768,7 +797,18 @@ it("creates two independent Twitch channels and isolates moderators, OBS, media 
   const revoked = event(modA, "disconnect");
   const ban = await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/bans/${accountIds[2]}`, { method: "PUT", headers: headers("stream-a") });
   expect(ban.status).toBe(200);
+  const outsider = await prisma.user.create({ data: { username: "twitch:outsider", displayName: "Outsider", passwordHash: "!", twitchUserId: "999" } });
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/bans/${outsider.id}`, {
+    method: "PUT", headers: headers("stream-a")
+  })).status).toBe(403);
+  expect(await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId: firstId, userId: outsider.id } } })).toBeNull();
   await revoked;
+  twitchDown = true;
+  expect((await fetch(`${baseUrl}/api/auth/twitch/channels/${firstId}/bans/${accountIds[2]}`, {
+    method: "DELETE", headers: headers("stream-a")
+  })).status).toBe(503);
+  expect(await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId: firstId, userId: accountIds[2] } } })).not.toBeNull();
+  twitchDown = false;
   expect(modB.connected).toBe(true);
   expect(independent.connected).toBe(true);
   expect((await fetch(`${baseUrl}/api/media`, { headers: { ...headers("mod-a"), "X-Channel-Id": firstId } })).status).toBe(403);
@@ -789,7 +829,7 @@ it("binds the existing channel only with the same legacy owner session and Twitc
   const stateCookie = start.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
   const callback = `${baseUrl}/api/auth/twitch/callback?state=${authorize.searchParams.get("state")}&code=code`;
   const wrongSession = await fetch(callback, { headers: { Cookie: `${stateCookie}; ${headers("mod-session").Cookie}` }, redirect: "manual" });
-  expect(wrongSession.headers.get("location")).toBe("/login?oauth_error=legacy_owner_required");
+  expect(wrongSession.headers.get("location")).toBe("/overlay?oauth_error=legacy_owner_required");
   expect((await prisma.streamer.findUnique({ where: { id: streamerId } }))?.ownerUserId).toBeNull();
   const retry = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" });
   const retryState = new URL(retry.headers.get("location")!).searchParams.get("state");
@@ -978,7 +1018,7 @@ it("rejects denied, expired and underscoped Twitch callbacks without creating a 
     `${baseUrl}/api/auth/twitch/callback?state=${denied.state}&error=access_denied`,
     { headers: { Cookie: denied.cookie }, redirect: "manual" }
   );
-  expect(deniedResponse.headers.get("location")).toBe("/login?oauth_error=denied");
+  expect(deniedResponse.headers.get("location")).toBe("/overlay?oauth_error=denied");
   expect(tokenRequests).toHaveLength(0);
   const popupStart = await fetch(`${baseUrl}/api/auth/twitch/start/unified?popup=1`, { redirect: "manual" });
   const popupState = new URL(popupStart.headers.get("location")!).searchParams.get("state");
@@ -1000,13 +1040,13 @@ it("rejects denied, expired and underscoped Twitch callbacks without creating a 
     `${baseUrl}/api/auth/twitch/callback?state=${expired.state}&code=code`,
     { headers: { Cookie: expired.cookie }, redirect: "manual" }
   );
-  expect(expiredResponse.headers.get("location")).toBe("/login?oauth_error=invalid_state");
+  expect(expiredResponse.headers.get("location")).toBe("/overlay?oauth_error=invalid_state");
   const underscoped = await start();
   const response = await fetch(
     `${baseUrl}/api/auth/twitch/callback?state=${underscoped.state}&code=code`,
     { headers: { Cookie: underscoped.cookie }, redirect: "manual" }
   );
-  expect(response.headers.get("location")).toBe("/login?oauth_error=insufficient_scope");
+  expect(response.headers.get("location")).toBe("/overlay?oauth_error=insufficient_scope");
   expect(await prisma.user.count({ where: { twitchUserId: { not: null } } })).toBe(0);
 });
 
@@ -1864,20 +1904,48 @@ describe("realtime access revocation", () => {
     expect(await prisma.session.count()).toBe(2);
   });
 
-  it("rotation disconnects old overlays and rejects their reconnects", async () => {
+  it("rotation preserves the live scene while revoking old OBS access", async () => {
+    const { sessionToken } = await bindTestTwitchOwner();
+    const live = await prisma.liveInstance.create({ data: {
+      streamerId, type: "TEXT", name: "On air", text: "On air"
+    } });
+    const preview = await prisma.previewElement.create({ data: {
+      streamerId, type: "TEXT", name: "Current scene", text: "Current scene"
+    } });
     const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
     const disconnected = event(overlay, "disconnect");
     const response = await fetch(`${baseUrl}/api/obs/regenerate`, {
       method: "POST",
-      headers: headers()
+      headers: { ...headers(sessionToken), "X-Channel-Id": streamerId }
     });
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     await disconnected;
     await socketClient({ overlayToken: "overlay-old" }, "connect_error");
     const streamer = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
-    expect(
-      (await socketClient({ overlayToken: streamer.overlayToken }, "overlay:state")).connected
-    ).toBe(true);
+    expect(streamer.overlayToken).not.toBe("overlay-old");
+    expect((await prisma.liveInstance.findUnique({ where: { id: live.id } }))?.text).toBe("On air");
+    const fresh = connect(baseUrl, { transports: ["websocket"], reconnection: false, autoConnect: false,
+      query: { overlayToken: streamer.overlayToken } });
+    clients.push(fresh);
+    const liveState = event<Array<{ id: string }>>(fresh, "overlay:state");
+    fresh.connect();
+    expect(await liveState).toContainEqual(expect.objectContaining({ id: preview.id }));
+  });
+
+  it("allows only the verified Twitch owner to rotate an OBS link with CSRF", async () => {
+    const { sessionToken } = await bindTestTwitchOwner();
+    const url = `${baseUrl}/api/obs/regenerate`;
+    const ownerHeaders = { ...headers(sessionToken), "X-Channel-Id": streamerId };
+    expect((await fetch(url, { method: "POST", headers: { Cookie: ownerHeaders.Cookie, "X-Channel-Id": streamerId } })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: { ...headers("mod-session"), "X-Channel-Id": streamerId } })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: headers("owner-session") })).status).toBe(403);
+    expect((await fetch(url, { method: "POST" })).status).toBe(403);
+    expect((await fetch(url, { method: "POST", headers: ownerHeaders })).status).toBe(200);
+    for (let count = 0; count < 4; count++) {
+      expect((await fetch(url, { method: "POST", headers: ownerHeaders })).status).toBe(200);
+    }
+    expect((await fetch(url, { method: "POST", headers: ownerHeaders })).status).toBe(429);
   });
 
   it("expires an idle socket without waiting for its next action", async () => {
@@ -1954,7 +2022,9 @@ describe("protected uploads", () => {
     expect(partial.status).toBe(206);
     expect(Buffer.from(await partial.arrayBuffer())).toEqual(png.subarray(0, 8));
     expect((await fetch(url, { method: "HEAD" })).status).toBe(200);
-    await fetch(`${baseUrl}/api/obs/regenerate`, { method: "POST", headers: headers() });
+    const { sessionToken } = await bindTestTwitchOwner();
+    await fetch(`${baseUrl}/api/obs/regenerate`, { method: "POST",
+      headers: { ...headers(sessionToken), "X-Channel-Id": streamerId } });
     expect((await fetch(url)).status).toBe(401);
     await fetch(`${baseUrl}/api/auth/logout`, { method: "POST", headers: headers("mod-session") });
     expect((await fetch(baseUrl + media.url, { headers: headers("mod-session") })).status).toBe(

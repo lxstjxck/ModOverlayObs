@@ -75,6 +75,14 @@ const emoteMutationLimit = createRateLimitMiddleware({
   key: (request) => `emote:${(request as AuthenticatedRequest).user.id}`
 });
 
+const regenerateObsLimit = createRateLimitMiddleware({
+  max: 5,
+  windowMs: 60 * 60_000,
+  message: "Too many OBS link changes. Try again later.",
+  key: (request) => `obs:regenerate:${(request as AuthenticatedRequest).user.id}`
+});
+const regeneratingObsChannels = new Set<string>();
+
 export function createAppRouter(): express.Router {
   const router = express.Router();
   router.use("/auth/twitch", twitchAuthRouter());
@@ -509,34 +517,40 @@ export function createAppRouter(): express.Router {
   router.post(
     "/obs/regenerate",
     requirePermission("canClearLive"),
+    regenerateObsLimit,
     async (request, response) => {
       const session = await getSessionFromCookieHeader(request.headers.cookie);
       const streamer = (request as AuthenticatedRequest).channel;
-      if (!isChannelOwner(session, streamer)) { response.status(403).json({ error: "Owner access required" }); return; }
-      const { updated, previousToken } = await prisma.$transaction(
-        async (tx) => {
-          const current = await tx.streamer.findUniqueOrThrow({ where: { id: streamer.id } });
-          await tx.liveInstance.deleteMany({ where: { streamerId: streamer.id } });
-          const updated = await tx.streamer.update({
-            where: { id: streamer.id },
-            data: { overlayToken: crypto.randomBytes(32).toString("hex") }
-          });
-          return { updated, previousToken: current.overlayToken };
-        },
-        { isolationLevel: "Serializable" }
-      );
-      accessRevocation.emit("overlay", previousToken);
-      await writeAudit(
-        updated.id,
-        (request as AuthenticatedRequest).user.id,
-        "overlay.token.regenerated"
-      );
-      response.setHeader("Cache-Control", "private, no-store");
-      response.json({
-        overlayUrl: buildOverlayUrl(request, updated.overlayToken),
-        canvasWidth: updated.canvasWidth,
-        canvasHeight: updated.canvasHeight
-      });
+      if (!session || session.authMethod !== "TWITCH" || !isChannelOwner(session, streamer)) {
+        response.status(403).json({ error: "Verified Twitch owner required" }); return;
+      }
+      if (regeneratingObsChannels.has(streamer.id)) {
+        response.status(409).json({ error: "OBS link change already in progress" }); return;
+      }
+      regeneratingObsChannels.add(streamer.id);
+      try {
+        const { updated, previousToken } = await prisma.$transaction(
+          async (tx) => {
+            const current = await tx.streamer.findUniqueOrThrow({ where: { id: streamer.id } });
+            const updated = await tx.streamer.update({
+              where: { id: streamer.id },
+              data: { overlayToken: crypto.randomBytes(32).toString("hex") }
+            });
+            return { updated, previousToken: current.overlayToken };
+          },
+          { isolationLevel: "Serializable" }
+        );
+        accessRevocation.emit("overlay", previousToken);
+        await writeAudit(updated.id, session.user.id, "overlay.token.regenerated");
+        response.setHeader("Cache-Control", "private, no-store");
+        response.json({
+          overlayUrl: buildOverlayUrl(request, updated.overlayToken),
+          canvasWidth: updated.canvasWidth,
+          canvasHeight: updated.canvasHeight
+        });
+      } finally {
+        regeneratingObsChannels.delete(streamer.id);
+      }
     }
   );
 

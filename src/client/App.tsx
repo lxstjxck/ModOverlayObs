@@ -1,11 +1,18 @@
+import { useEffect } from "react";
 import { LoginPage } from "./pages/LoginPage";
 import { ModeratorApp } from "./pages/ModeratorApp";
 import { ObsSetupPage } from "./pages/ObsSetupPage";
 import { OverlayPage } from "./pages/OverlayPage";
-import { TwitchLoginPage } from "./pages/TwitchLoginPage";
 import { TwitchLandingPage, TwitchDashboardPage } from "./pages/TwitchPages";
 import { EcosystemPage } from "./pages/EcosystemPage";
 import { TwitchPopupPage } from "./pages/TwitchPopupPage";
+
+function RedirectOldLogin() {
+  useEffect(() => {
+    window.location.replace(`/overlay${window.location.search}`);
+  }, []);
+  return null;
+}
 
 export function App() {
   const path = window.location.pathname;
@@ -16,7 +23,7 @@ export function App() {
     return <EcosystemPage />;
   }
   if (path === "/overlay") return <TwitchLandingPage />;
-  if (path === "/login") return <TwitchLoginPage />;
+  if (path === "/login") return <RedirectOldLogin />;
   if (path === "/oauth/popup") return <TwitchPopupPage />;
   if (path === "/legacy-login") {
     return <LoginPage />;

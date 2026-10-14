@@ -12,6 +12,7 @@ export const oauthErrors: Record<string, string> = {
   denied: "Вход через Twitch отменён. Разрешите доступ и попробуйте снова.",
   insufficient_scope: "Twitch не выдал все необходимые разрешения. Разрешите оба доступа и попробуйте снова.",
   legacy_session: "Выйдите из старой учётной записи перед входом через Twitch.",
+  legacy_owner_required: "Для привязки канала войдите в существующую учётную запись владельца.",
   invalid_response: "Twitch вернул некорректный ответ. Попробуйте снова.",
   twitch_unavailable: "Не удалось завершить вход через Twitch. Попробуйте позже."
 };
@@ -24,8 +25,12 @@ export function isTrustedPopupMessage(event: MessageEvent, popup: Window | null)
 }
 
 export function usePublicTwitchAuth() {
+  const initialOAuthError = new URLSearchParams(window.location.search).get("oauth_error");
   const [auth, setAuth] = useState<AuthState>({ status: "loading", user: null });
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => initialOAuthError
+    ? oauthErrors[initialOAuthError] ?? "Ошибка авторизации. Попробуйте снова."
+    : "");
+  const oauthErrorPending = useRef(Boolean(initialOAuthError));
   const [popupBlocked, setPopupBlocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const popupRef = useRef<Window | null>(null);
@@ -45,7 +50,7 @@ export function usePublicTwitchAuth() {
       setCsrfToken(null);
       if (cause instanceof ApiError && cause.status === 401) {
         setAuth({ status: "guest", user: null });
-        setError("");
+        if (!oauthErrorPending.current) setError("");
       } else {
         setAuth({ status: "unavailable", user: null });
         setError("Не удалось проверить сессию. Проверьте соединение и обновите страницу.");
@@ -55,6 +60,11 @@ export function usePublicTwitchAuth() {
   }
 
   useEffect(() => {
+    if (initialOAuthError) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("oauth_error");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
     void refresh();
     const onFocus = () => { if (!popupRef.current) void refresh(); };
     window.addEventListener("focus", onFocus);
@@ -67,6 +77,7 @@ export function usePublicTwitchAuth() {
 
   function startPopup() {
     if (busy) return;
+    oauthErrorPending.current = false;
     setError("");
     setPopupBlocked(false);
     const popup = window.open("/api/auth/twitch/start/unified?popup=1", "lxst-twitch-oauth", "popup,width=520,height=720");
@@ -166,6 +177,8 @@ export function usePublicTwitchAuth() {
   }
 
   function retry() {
+    oauthErrorPending.current = false;
+    setError("");
     setAuth({ status: "loading", user: null });
     void refresh();
   }

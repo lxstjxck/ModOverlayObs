@@ -31,7 +31,7 @@ export function LoginPage() {
     <main className="lxst-auth-page">
       <header className="lxst-auth-header lxst-shell">
         <BrandIdentity />
-        <a href="/login" className="lxst-back-link">
+        <a href="/overlay" className="lxst-back-link">
           ← Вход через Twitch
         </a>
       </header>

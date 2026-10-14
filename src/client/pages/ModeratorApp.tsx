@@ -1,8 +1,7 @@
 import {
   AlertTriangle,
   LogOut,
-  Monitor,
-  RefreshCw
+  Monitor
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
@@ -25,6 +24,7 @@ import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
 import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
+import { LoadingScreen } from "../components/ui/LoadingSpinner";
 import { reconcilePreview } from "../previewSync";
 import { fitInitialMediaDimensions, readMediaDimensions } from "../mediaDimensions";
 import { layerOrderPatches, reversePatch, transformCommand } from "../canvasCommands";
@@ -202,7 +202,7 @@ export function ModeratorApp() {
         ) {
           window.location.href = window.location.pathname.startsWith("/channel/")
             ? "/channels"
-            : "/login";
+            : "/overlay";
           return;
         }
         setError(bootError instanceof Error ? bootError.message : "Could not load app");
@@ -245,7 +245,7 @@ export function ModeratorApp() {
         ? user.role === "OWNER"
           ? "/streamer"
           : "/channels"
-        : "/login";
+        : "/overlay";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
       canvasRefreshPending.current = false;
@@ -465,18 +465,11 @@ export function ModeratorApp() {
   }, [mediaDeleteIds.length, deletingMedia]);
 
   if (!user || !streamer) {
-    return (
-      <main className="loading-page">
-        {error ? (
-          <div className="error-box">{error}</div>
-        ) : (
-          <>
-            <RefreshCw className="spin" size={24} />
-            Загружаем LXST Overlay
-          </>
-        )}
-      </main>
-    );
+    if (!error) return <LoadingScreen message="Загружаем LXST Overlay…" />;
+    return <main className="lxst-loading-screen">
+      <div className="error-box" role="alert">{error}</div>
+      <button type="button" onClick={() => window.location.reload()}>Повторить загрузку</button>
+    </main>;
   }
 
   async function refreshMedia() {

@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TwitchLandingPage } from "../src/client/pages/TwitchPages";
-import { TwitchLoginPage } from "../src/client/pages/TwitchLoginPage";
 import { App } from "../src/client/App";
 import { setPublicPageMetadata } from "../src/client/publicPageMetadata";
 import { isTrustedPopupMessage } from "../src/client/publicTwitchAuth";
@@ -86,13 +85,16 @@ describe("public landing page", () => {
     expect(html).toContain('id="how-it-works"');
     expect(html).toContain('id="features"');
     expect(html).toContain('href="/"');
-    expect(html).toContain('href="/login"');
+    expect(html).not.toContain('href="/login"');
+    for (const removed of ["ИНСТРУМЕНТ ДЛЯ ЖИВОГО ЭФИРА", "ПРОСТОЕ ПОДКЛЮЧЕНИЕ", "ВОЗМОЖНОСТИ", "ГОТОВЫ НАЧАТЬ?", "Я модератор", "Вход для модератора", "Предпросмотр помогает"]) {
+      expect(html).not.toContain(removed);
+    }
   });
 
   it("preserves the existing dashboard, editor, login and OBS routes", () => {
     vi.stubGlobal("React", React);
     for (const [path, pageName] of [
-      ["/login", "TwitchLoginPage"],
+      ["/login", "RedirectOldLogin"],
       ["/oauth/popup", "TwitchPopupPage"],
       ["/legacy-login", "LoginPage"],
       ["/streamer", "TwitchDashboardPage"],
@@ -128,12 +130,12 @@ describe("public landing page", () => {
     expect(landingCss).toContain("@media (prefers-reduced-motion: reduce)");
   });
 
-  it("shows a neutral session check and keeps the fallback login screen", () => {
+  it("shows a neutral session check without the old login link", () => {
     const html = renderLanding();
     expect(html).toContain('href="/"');
     expect(html).toContain('href="#how-it-works"');
     expect(html).toContain('href="#features"');
-    expect(html).toContain('href="/login"');
+    expect(html).not.toContain('href="/login"');
     expect(html).toContain("Проверяем вход…");
     expect(html).toContain("LXST Overlay");
     expect(html).toContain('href="https://github.com/lxstjxck"');
@@ -167,15 +169,15 @@ describe("public landing page", () => {
     expect(ecosystem.match(/<header[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("GitHub");
   });
 
-  it("uses one LX mark asset and the 0.1.9 package version", () => {
+  it("uses one LX mark asset and the 0.1.10 package version", () => {
     const mark = readFileSync(new URL("../src/client/components/BrandMark.tsx", import.meta.url), "utf8");
     const favicon = readFileSync(new URL("../public/favicon.svg", import.meta.url), "utf8");
     const identity = readFileSync(new URL("../src/client/components/BrandIdentity.tsx", import.meta.url), "utf8");
     const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-    expect(packageJson.version).toBe("0.1.9");
-    expect(lock.version).toBe("0.1.9");
-    expect(lock.packages[""].version).toBe("0.1.9");
+    expect(packageJson.version).toBe("0.1.10");
+    expect(lock.version).toBe("0.1.10");
+    expect(lock.packages[""].version).toBe("0.1.10");
     expect(mark).toContain('const brandMarkSrc = "/favicon.svg"');
     expect(mark).toContain('<img src={brandMarkSrc}');
     expect(readFileSync(new URL("../index.html", import.meta.url), "utf8")).toContain('href="/favicon.svg"');
@@ -236,7 +238,6 @@ describe("public landing page", () => {
       "модераторов",
       "Twitch TTS",
       "Смайлы Twitch и 7TV",
-      "Предпросмотр",
       "OBS"
     ]) {
       expect(html).toContain(item);
@@ -245,13 +246,14 @@ describe("public landing page", () => {
     expect(html).toContain('id="how-title"');
   });
 
-  it("keeps unified OAuth login, legacy login and accessible errors", () => {
+  it("shows OAuth errors on /overlay and keeps the legacy route separate", () => {
     vi.stubGlobal("React", React);
-    vi.stubGlobal("window", { location: { search: "?oauth_error=denied" } });
-    const html = renderToStaticMarkup(React.createElement(TwitchLoginPage));
-    expect(html).toContain('href="/api/auth/twitch/start/unified"');
-    expect(html).toContain('href="/legacy-login"');
+    vi.stubGlobal("window", { location: { pathname: "/overlay", search: "?oauth_error=denied" } });
+    const html = renderToStaticMarkup(React.createElement(App));
     expect(html).toContain('role="alert"');
     expect(html).toContain("Вход через Twitch отменён.");
+    expect(html).not.toContain('href="/login"');
+    vi.stubGlobal("window", { location: { pathname: "/legacy-login", search: "" } });
+    expect((App() as React.ReactElement).type.name).toBe("LoginPage");
   });
 });

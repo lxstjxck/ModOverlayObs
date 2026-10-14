@@ -61,7 +61,7 @@ async function twitchJson<T>(url: string, init: RequestInit): Promise<T> {
 
 function fail(response: express.Response, reason: string, popup = false): void {
   response.setHeader("Cache-Control", "no-store");
-  response.redirect(303, popup ? `/oauth/popup?error=${reason}` : `/login?oauth_error=${reason}`);
+  response.redirect(303, popup ? `/oauth/popup?error=${reason}` : `/overlay?oauth_error=${reason}`);
 }
 
 export function twitchAuthRouter(): express.Router {
@@ -75,7 +75,7 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     if (!configured()) {
-      if (popup) fail(response, "twitch_unavailable", true);
+      if (popup || mode === "unified") fail(response, "twitch_unavailable", popup);
       else response.status(503).json({ error: "Twitch login is not configured" });
       return;
     }
@@ -89,8 +89,7 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     if (mode !== "bind" && existing?.authMethod === "LEGACY") {
-      if (popup) fail(response, "legacy_session", true);
-      else response.status(409).json({ error: "Sign out of the legacy account before Twitch login" });
+      fail(response, "legacy_session", popup);
       return;
     }
     const state = crypto.randomBytes(32).toString("base64url");
@@ -471,7 +470,13 @@ export function twitchAuthRouter(): express.Router {
     try {
       await setModeratorBan(channelId, session.user.id, String(request.params.userId), method === "put");
       response.json({ ok: true });
-    } catch { response.status(403).json({ error: "Permission denied" }); }
+    } catch (error) {
+      if (error instanceof Error && error.message === "Permission denied") {
+        response.status(403).json({ error: "Permission denied" });
+      } else {
+        response.status(503).json({ error: "Twitch access verification unavailable" });
+      }
+    }
   });
 
   return router;

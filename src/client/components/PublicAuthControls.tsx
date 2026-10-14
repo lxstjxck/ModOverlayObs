@@ -1,9 +1,13 @@
 import { usePublicAuthContext } from "../publicTwitchAuth";
+import { LoadingSpinner } from "./ui/LoadingSpinner";
 
 export function PublicAuthControls({ compact = false }: { compact?: boolean }) {
   const { auth, error, popupBlocked, busy, startPopup, logout, retry } = usePublicAuthContext();
   if (auth.status === "loading") {
-    return <div className="public-auth-status" role="status">Проверяем вход…</div>;
+    return <div className="public-auth-status" role="status">
+      <LoadingSpinner /> Проверяем вход…
+      {error && <span className="public-auth-error" role="alert">{error}</span>}
+    </div>;
   }
   if (auth.status === "unavailable") {
     return <div className="public-auth">
@@ -20,9 +24,9 @@ export function PublicAuthControls({ compact = false }: { compact?: boolean }) {
       <a className="public-auth-channels" href="/channels">Мои каналы</a>
       {compact && <button className="public-auth-logout" type="button" onClick={() => void logout()} disabled={busy}>Выйти</button>}
     </> : <button className="public-auth-login" type="button" onClick={startPopup} disabled={busy}>
-      {busy ? "Ожидаем вход…" : "Войти через Twitch"}
+      {busy && <LoadingSpinner />}{busy ? "Ожидаем вход…" : "Войти через Twitch"}
     </button>}
     {error && <div className="public-auth-error" role="alert">{error}</div>}
-    {popupBlocked && <a className="public-auth-fallback" href="/api/auth/twitch/start/unified">Обычный вход в этой вкладке</a>}
+    {(popupBlocked || error) && <a className="public-auth-fallback" href="/api/auth/twitch/start/unified">Обычный вход в этой вкладке</a>}
   </div>;
 }
