@@ -7,6 +7,7 @@ import { config, isProduction } from "./config";
 import { prisma } from "./db";
 import { defaultPermissionsByRole } from "../shared/types";
 import { cleanupStaleTtsFiles } from "./ttsFiles";
+import { cleanupStaleUploadFiles } from "./uploads";
 
 export async function ensureRuntimeState(): Promise<void> {
   const userCount = await prisma.user.count();
@@ -23,6 +24,7 @@ export async function ensureRuntimeState(): Promise<void> {
   await fs.mkdir(config.uploadDir, { recursive: true });
   await fs.mkdir(path.resolve(config.projectRoot, "database"), { recursive: true });
   await fs.mkdir(path.join(config.uploadDir, ".tmp"), { recursive: true });
+  await cleanupStaleUploadFiles().catch(() => console.warn("Temporary upload cleanup failed"));
   if (config.ttsEnabled) await cleanupStaleTtsFiles();
 
   await prisma.session.deleteMany({

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import http from "node:http";
+import net from "node:net";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -71,6 +72,7 @@ import { getChannelEmotes } from "../src/server/emotes";
 import { ensureRuntimeState } from "../src/server/bootstrap";
 import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModeratorBan, syncModerators, verifyStreamerIdentity } from "../src/server/channelAccess";
 import { startTts, stopTts } from "../src/server/tts";
+import { cleanupStaleUploadFiles } from "../src/server/uploads";
 import type { OverlayReloadStatus } from "../src/shared/types";
 
 const png = Buffer.from(
@@ -2231,6 +2233,42 @@ describe("protected uploads", () => {
     await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
     expect((await upload("mod-session")).status).toBe(403);
     await expect.poll(files).toEqual([]);
+    expect(await prisma.media.count()).toBe(0);
+  });
+
+  it("removes a temporary file after the client interrupts an upload", async () => {
+    const address = new URL(baseUrl);
+    const socket = net.createConnection(Number(address.port), address.hostname);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      const boundary = "controlled-upload-boundary";
+      const auth = headers();
+      socket.write([
+        "POST /api/media HTTP/1.1",
+        `Host: ${address.host}`,
+        "Content-Type: multipart/form-data; boundary=" + boundary,
+        "Content-Length: 4096",
+        `Cookie: ${auth.Cookie}`,
+        `x-csrf-token: ${auth["x-csrf-token"]}`,
+        `x-channel-id: ${auth["x-channel-id"]}`,
+        "Connection: close",
+        "",
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="partial.png"\r\nContent-Type: image/png\r\n\r\npartial-data`
+      ].join("\r\n"));
+      await expect.poll(async () => (await fs.readdir(path.join(config.uploadDir, ".tmp"))).length).toBe(1);
+      const [name] = await fs.readdir(path.join(config.uploadDir, ".tmp"));
+      const temporaryPath = path.join(config.uploadDir, ".tmp", name);
+      const old = new Date(Date.now() - 25 * 60 * 60_000);
+      await fs.utimes(temporaryPath, old, old);
+      expect(await cleanupStaleUploadFiles()).toBe(0);
+      expect(await fs.stat(temporaryPath).then((stat) => stat.isFile())).toBe(true);
+    } finally {
+      socket.destroy();
+    }
+    await expect.poll(async () => (await fs.readdir(path.join(config.uploadDir, ".tmp"))).length).toBe(0);
     expect(await prisma.media.count()).toBe(0);
   });
 });

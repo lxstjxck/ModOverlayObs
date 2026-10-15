@@ -7,6 +7,7 @@ import { createAppRouter, configureStatic, configureUploads } from "./routes";
 import { applySecurityHeaders, requireCsrf, requireTrustedOrigin } from "./security";
 import { configureSocket } from "./socket";
 import { startTts, stopTts } from "./tts";
+import { cleanupStaleUploadFiles } from "./uploads";
 
 async function main(): Promise<void> {
   validateProductionConfig();
@@ -34,7 +35,14 @@ async function main(): Promise<void> {
   const httpServer = http.createServer(app);
   const socketServer = configureSocket(httpServer);
   if (config.ttsEnabled) startTts(socketServer);
-  httpServer.once("close", stopTts);
+  const uploadCleanupTimer = setInterval(() => {
+    void cleanupStaleUploadFiles().catch(() => console.warn("Temporary upload cleanup failed"));
+  }, 60 * 60_000);
+  uploadCleanupTimer.unref();
+  httpServer.once("close", () => {
+    clearInterval(uploadCleanupTimer);
+    stopTts();
+  });
 
   httpServer.listen(config.port, () => {
     console.log(`Moderator Overlay server listening on http://localhost:${config.port}`);
