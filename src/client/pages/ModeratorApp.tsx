@@ -29,6 +29,7 @@ import { LoadingScreen } from "../components/ui/LoadingSpinner";
 import { reconcilePreview } from "../previewSync";
 import { fitInitialMediaDimensions, readMediaDimensions } from "../mediaDimensions";
 import { layerOrderPatches, reversePatch, transformCommand } from "../canvasCommands";
+import { isRenderableMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 
 type HistoryChange = {
   id: string;
@@ -140,6 +141,7 @@ export function ModeratorApp() {
   const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
   const [emotesOpened, setEmotesOpened] = useState(false);
   const [preview, setPreview] = useState<OverlayElement[]>([]);
+  const [blockedLive, setBlockedLive] = useState<Array<{ id: string; name: string }>>([]);
   const [sceneRepair, setSceneRepair] = useState<Record<"preview" | "live", Array<{ id: string; name: string }>>>(
     { preview: [], live: [] }
   );
@@ -168,6 +170,7 @@ export function ModeratorApp() {
   const copiedId = useRef<string | null>(null);
   const history = useRef<{ undo: HistoryEntry[]; redo: HistoryEntry[] }>({ undo: [], redo: [] });
   previewRef.current = preview;
+  const blockedPreview = preview.filter((item) => item.type !== "TEXT" && !isRenderableMediaUrl(item.src));
 
   useEffect(() => {
     let cancelled = false;
@@ -320,13 +323,17 @@ export function ModeratorApp() {
     socket.on("app:error", (message: string) => setError(message));
     socket.on("scene:repair", (notice: SceneRepairNotice) => {
       setSceneRepair((current) => ({ ...current, [notice.kind]: notice.items }));
+      if (notice.kind === "live") setBlockedLive([]);
       if (notice.kind === "preview") {
         canvasRefreshPending.current = false;
         setPreview([]);
       }
       setError("Сцена слишком велика для безопасной передачи. Владелец может удалить лишние элементы ниже.");
     });
-    socket.on("live:state", () => setSceneRepair((current) => ({ ...current, live: [] })));
+    socket.on("live:state", (state: OverlayElement[]) => {
+      setSceneRepair((current) => ({ ...current, live: [] }));
+      setBlockedLive(state.filter((item) => item.type !== "TEXT" && !isRenderableMediaUrl(item.src)));
+    });
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -813,6 +820,14 @@ export function ModeratorApp() {
             x
           </button>
         </div>
+      )}
+
+      {(blockedPreview.length > 0 || blockedLive.length > 0) && (
+        <section className="scene-repair" aria-label="Заблокированные внешние медиа" role="status">
+          <p>{unsafeMediaUrlMessage}</p>
+          {blockedPreview.length > 0 && <div><strong>Подготовка</strong>{blockedPreview.map((item) => <div key={item.id}>{item.name}</div>)}</div>}
+          {blockedLive.length > 0 && <div><strong>LIVE</strong>{blockedLive.map((item) => <div key={item.id}>{item.name}</div>)}</div>}
+        </section>
       )}
 
       {(sceneRepair.preview.length > 0 || sceneRepair.live.length > 0) && (

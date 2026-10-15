@@ -1,5 +1,6 @@
 import type { CustomEmote, Streamer } from "@prisma/client";
 import type { ChannelEmote, ChannelEmotesResponse, EmoteProviderName } from "../shared/types";
+import { isPublicHttpsMediaUrl, unsafeMediaUrlMessage } from "../shared/mediaUrl";
 import { config } from "./config";
 import { prisma } from "./db";
 
@@ -104,7 +105,7 @@ function validTwitchUrl(value: string): boolean {
   if (/[{}]|%7b|%7d/i.test(value)) return false;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.hostname === "static-cdn.jtvnw.net";
+    return isPublicHttpsMediaUrl(value) && url.hostname === "static-cdn.jtvnw.net";
   } catch {
     return false;
   }
@@ -313,14 +314,7 @@ export async function createCustomEmote(
   input: { url: string; name?: string }
 ): Promise<ChannelEmote> {
   const url = new URL(input.url);
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.port ||
-    !url.hostname.includes(".")
-  )
-    throw new Error("Use a public HTTPS image URL");
+  if (!isPublicHttpsMediaUrl(input.url)) throw new Error(unsafeMediaUrlMessage);
   const match =
     url.hostname === "7tv.app" ? /^\/emotes\/([a-zA-Z0-9]{20,32})\/?$/.exec(url.pathname) : null;
   let emote: ChannelEmote;
@@ -331,11 +325,9 @@ export async function createCustomEmote(
     emote = normalized;
   } else {
     if (
-      !/\.(png|jpe?g|gif|webp)(?:$)/i.test(url.pathname) ||
-      /^(localhost|.*\.localhost)$/i.test(url.hostname) ||
-      /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)
+      !/\.(png|jpe?g|gif|webp)(?:$)/i.test(url.pathname)
     )
-      throw new Error("Use a direct public HTTPS PNG, JPEG, GIF, or WebP URL");
+      throw new Error(unsafeMediaUrlMessage);
     const name =
       input.name ||
       decodeURIComponent(url.pathname.split("/").pop() || "Custom emote").slice(0, 80);

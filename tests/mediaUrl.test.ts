@@ -3,9 +3,11 @@ import {
   buildYouTubeEmbedUrl,
   detectMediaTypeFromUrl,
   getEbloPostId,
-  getYouTubeVideoId
+  getYouTubeVideoId,
+  isPublicHttpsMediaUrl,
+  isRenderableMediaUrl
 } from "../src/shared/mediaUrl";
-import { mediaUrlSchema } from "../src/shared/validation";
+import { customEmoteSchema, mediaUrlSchema } from "../src/shared/validation";
 
 describe("remote media validation", () => {
   it.each(["IMAGE", "GIF", "VIDEO", "AUDIO"])("accepts HTTPS links for %s", (type) => {
@@ -17,6 +19,54 @@ describe("remote media validation", () => {
       expect(mediaUrlSchema.safeParse({ type: "IMAGE", url }).success).toBe(false);
     }
   );
+
+  it.each([
+    "https://cdn.example.org/picture.png",
+    "https://cdn.example.org/movie.mp4",
+    "https://cdn.example.org/sound.mp3",
+    "https://www.youtube.com/watch?v=OqPxaKs8xrk",
+    "https://eblo.id/XRbi1j2",
+    "https://static-cdn.jtvnw.net/emoticons/v2/123/static/dark/3.0",
+    "https://cdn.7tv.app/emote/123/4x.webp",
+    "https://custom.example.org/emote.gif",
+    "https://8.8.8.8/media.png",
+    "https://[2606:4700:4700::1111]/media.png"
+  ])("accepts public HTTPS destination %s", (url) => {
+    expect(isPublicHttpsMediaUrl(url)).toBe(true);
+    expect(isRenderableMediaUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "http://localhost/a.mp4", "http://127.0.0.1/a.mp4", "https://127.0.0.1/a.mp4",
+    "https://10.0.0.1/a.mp4", "https://172.16.2.3/a.mp4", "https://192.168.1.1/a.mp4",
+    "https://169.254.1.1/a.mp4", "https://100.64.0.1/a.mp4", "https://0.0.0.0/a.mp4",
+    "https://[::1]/a.mp4", "https://[fc00::1]/a.mp4", "https://[fe80::1]/a.mp4",
+    "https://[::ffff:127.0.0.1]/a.mp4", "https://2130706433/a.mp4",
+    "https://0x7f000001/a.mp4", "https://0177.0.0.1/a.mp4", "https://127.1/a.mp4",
+    "https://127%2e0%2e0%2e1/a.mp4", "https://[::ffff:7f00:1]/a.mp4",
+    "https://foo.localhost/a.mp4", "https://foo.local/a.mp4", "https://router.lan/a.mp4",
+    "https://foo%2elocal/a.mp4",
+    "https://router.home.arpa/a.mp4", "https://host.localdomain/a.mp4",
+    "https://localhost./a.mp4", "https://user:pass@example.org/a.mp4",
+    "file:///tmp/a.png", "data:image/png,AAAA", "javascript:alert(1)",
+    "https://example.org:8443/a.mp4", "https://example.org\\@127.0.0.1/a.mp4",
+    "not a url", `https://example.org/${"a".repeat(2048)}`
+  ])("rejects unsafe destination %s", (url) => {
+    expect(isPublicHttpsMediaUrl(url)).toBe(false);
+    expect(isRenderableMediaUrl(url)).toBe(false);
+    expect(mediaUrlSchema.safeParse({ type: "VIDEO", url }).success).toBe(false);
+  });
+
+  it("keeps generated uploads usable without accepting external upload lookalikes", () => {
+    expect(isRenderableMediaUrl("/uploads/abc-123.mp4?overlayToken=secret_1")).toBe(true);
+    expect(isRenderableMediaUrl("/uploads/abc-123.mp4")).toBe(true);
+    expect(isRenderableMediaUrl("//evil.example.org/uploads/abc.mp4")).toBe(false);
+  });
+
+  it("applies the same destination policy to Custom Emotes", () => {
+    expect(customEmoteSchema.safeParse({ url: "https://custom.example.org/emote.webp" }).success).toBe(true);
+    expect(customEmoteSchema.safeParse({ url: "https://192.168.1.1/emote.webp" }).success).toBe(false);
+  });
 });
 
 describe("media url helpers", () => {

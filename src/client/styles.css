@@ -865,6 +865,18 @@ input[type="color"] {
   pointer-events: none;
 }
 
+.blocked-media {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  overflow: hidden;
+  background: rgba(65, 20, 20, 0.9);
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
 .video-frame {
   border: 0;
   background: #000;

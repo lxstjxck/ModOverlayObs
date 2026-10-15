@@ -23,7 +23,7 @@ import {
 } from "./auth";
 import { config } from "./config";
 import { resolveEbloMedia } from "./ebloMedia";
-import { getEbloPostId } from "../shared/mediaUrl";
+import { getEbloPostId, isPublicHttpsMediaUrl, unsafeMediaUrlMessage } from "../shared/mediaUrl";
 import { clearEmoteCache, createCustomEmote, getChannelEmotes } from "./emotes";
 import { prisma } from "./db";
 import { ttsRouter } from "./tts";
@@ -195,7 +195,8 @@ export function createAppRouter(): express.Router {
     async (request, response) => {
       const parsed = customEmoteSchema.safeParse(request.body);
       if (!parsed.success) {
-        response.status(400).json({ error: "Invalid emote URL or name" });
+        const validUrl = typeof request.body?.url === "string" && isPublicHttpsMediaUrl(request.body.url);
+        response.status(400).json({ error: validUrl ? "Invalid emote URL or name" : unsafeMediaUrlMessage });
         return;
       }
       const streamer = (request as AuthenticatedRequest).channel;
@@ -251,7 +252,8 @@ export function createAppRouter(): express.Router {
   router.post("/media/url", uploadRateLimit, async (request, response) => {
     const parsed = mediaUrlSchema.safeParse(request.body);
     if (!parsed.success) {
-      response.status(400).json({ error: "Invalid media URL" });
+      const validUrl = typeof request.body?.url === "string" && isPublicHttpsMediaUrl(request.body.url);
+      response.status(400).json({ error: validUrl ? "Invalid media URL" : unsafeMediaUrlMessage });
       return;
     }
 

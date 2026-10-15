@@ -1,4 +1,4 @@
-import { detectMediaTypeFromUrl, getEbloPostId } from "../shared/mediaUrl";
+import { detectMediaTypeFromUrl, getEbloPostId, isPublicHttpsMediaUrl } from "../shared/mediaUrl";
 import type { MediaType } from "../shared/types";
 
 const maxPageBytes = 256_000;
@@ -25,6 +25,7 @@ export function parseEbloMediaPage(html: string, postId: string): EbloMedia | nu
   const url = new URL(source, "https://eblo.id");
   if (
     url.origin !== "https://eblo.id" ||
+    !isPublicHttpsMediaUrl(url.href) ||
     !url.pathname.startsWith(`/uploads/${postId}/`) ||
     url.search ||
     url.hash

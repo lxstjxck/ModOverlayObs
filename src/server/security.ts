@@ -135,7 +135,7 @@ export function clientIp(request: Request): string {
   return request.socket.remoteAddress || "unknown";
 }
 
-function buildContentSecurityPolicy(): string {
+export function buildContentSecurityPolicy(): string {
   const connectSources = new Set(["'self'", "ws:", "wss:"]);
   for (const origin of config.originAllowlist) {
     connectSources.add(origin);
@@ -152,7 +152,7 @@ function buildContentSecurityPolicy(): string {
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data: blob:",
-    "media-src 'self' https: http: blob:",
+    "media-src 'self' https: blob:",
     `connect-src ${Array.from(connectSources).join(" ")}`,
     "font-src 'self' data:"
   ].join("; ");

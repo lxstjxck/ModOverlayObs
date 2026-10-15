@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import type { ChannelEmote, ChannelEmotesResponse, StreamerView } from "../../shared/types";
 import { api } from "../api";
+import { isPublicHttpsMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 
 interface Props {
   streamer: StreamerView;
@@ -137,11 +138,12 @@ export function EmotesPanel({
                 type="button"
                 title={`Добавить ${emote.name} в область подготовки`}
                 aria-label={`Добавить ${emote.name} в область подготовки`}
-                disabled={!canPlace}
+                disabled={!canPlace || !isPublicHttpsMediaUrl(emote.sourceUrl)}
                 onClick={() => onAdd(emote)}
               >
-                <img src={emote.previewUrl} alt="" loading="lazy" />
+                {isPublicHttpsMediaUrl(emote.previewUrl) ? <img src={emote.previewUrl} alt="" loading="lazy" referrerPolicy="no-referrer" /> : <span>{unsafeMediaUrlMessage}</span>}
                 <span>{emote.name}</span>
+                {!isPublicHttpsMediaUrl(emote.sourceUrl) && <span>{unsafeMediaUrlMessage}</span>}
               </button>
               {title === "CUSTOM" && canDelete && (
                 <button

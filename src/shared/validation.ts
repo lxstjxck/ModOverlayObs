@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getEbloPostId } from "./mediaUrl";
+import { getEbloPostId, isPublicHttpsMediaUrl } from "./mediaUrl";
 import { sceneLimits } from "./sceneLimits";
 
 const color = z.string().max(64).regex(/^(?:transparent|#[0-9a-fA-F]{3,8}|rgba?\(\s*[\d.%,\s]+\))$/);
@@ -117,7 +117,8 @@ export const twitchChannelSchema = z
   .strict();
 export const customEmoteSchema = z
   .object({ url: z.string().url().max(2048), name: z.string().trim().min(1).max(80).optional() })
-  .strict();
+  .strict()
+  .refine((value) => isPublicHttpsMediaUrl(value.url), "A public HTTPS media URL is required");
 
 export const mediaUrlSchema = z
   .object({
@@ -126,14 +127,7 @@ export const mediaUrlSchema = z
     name: z.string().trim().min(1).max(180).optional()
   })
   .strict()
-  .refine((value) => {
-    try {
-      const parsed = new URL(value.url);
-      return parsed.protocol === "http:" || parsed.protocol === "https:";
-    } catch {
-      return false;
-    }
-  }, "Only http:// and https:// media URLs are allowed")
+  .refine((value) => isPublicHttpsMediaUrl(value.url), "A public HTTPS media URL is required")
   .refine((value) => Boolean(value.type || getEbloPostId(value.url)), "Media type is required");
 
 export const idSchema = z.object({ id: z.string().min(1) }).strict();

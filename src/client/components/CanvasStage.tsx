@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent
 } from "react";
 import { EyeOff } from "lucide-react";
-import { buildYouTubeEmbedUrl } from "../../shared/mediaUrl";
+import { buildYouTubeEmbedUrl, isRenderableMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 import type { OverlayElement, StreamerView } from "../../shared/types";
 import { setMediaNodeMuted, setMediaNodeVolume } from "../mediaPlayback";
 import { cropClipPath, getCrop, scaleCrop } from "../cropGeometry";
@@ -848,6 +848,15 @@ function ElementContent({
     );
   }
 
+  if (!isRenderableMediaUrl(element.src)) {
+    return mode === "workspace" ? (
+      <div className="media-element blocked-media" role="status">
+        <strong>{element.name}</strong>
+        <span>{unsafeMediaUrlMessage}</span>
+      </div>
+    ) : null;
+  }
+
   if (element.type === "VIDEO" || element.type === "AUDIO") {
     const youtubeSrc = buildYouTubeEmbedUrl(element.src, {
       origin: getWindowOrigin()
@@ -860,7 +869,7 @@ function ElementContent({
           data-preview-media-id={mode === "workspace" ? element.id : undefined}
           data-overlay-media-id={mode === "overlay" ? element.id : undefined}
           src={youtubeSrc}
-          referrerPolicy="strict-origin-when-cross-origin"
+          referrerPolicy="no-referrer"
           title={element.name}
           allow="autoplay; encrypted-media; picture-in-picture"
           allowFullScreen
@@ -938,6 +947,7 @@ function RetryImage({ element }: { element: OverlayElement }) {
       className="media-element"
       style={buildCropStyle(element)}
       src={retrySource}
+      referrerPolicy="no-referrer"
       alt={element.name}
       draggable={false}
       onError={() => {

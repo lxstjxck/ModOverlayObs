@@ -1921,6 +1921,43 @@ it("resolves an eblo.id post server-side and checks the resolved media permissio
   );
 });
 
+it("rejects unsafe external media without removing legacy records or changing a safe scene", async () => {
+  const post = (url: string, type = "IMAGE") => fetch(`${baseUrl}/api/media/url`, {
+    method: "POST",
+    headers: { ...headers(), "content-type": "application/json" },
+    body: JSON.stringify({ url, type })
+  });
+  for (const url of ["http://127.0.0.1/picture.png", "https://192.168.1.1/picture.png", "https://0x7f000001/picture.png", "https://host.local/picture.png"]) {
+    const response = await post(url);
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string }).toMatchObject({
+      error: "Нельзя использовать локальный или небезопасный адрес. Укажите публичную HTTPS-ссылку на медиа."
+    });
+  }
+  expect(await prisma.media.count()).toBe(0);
+
+  const safe = await post("https://cdn.example.org/picture.png");
+  expect(safe.status).toBe(201);
+  const safeMedia = (await safe.json()) as { media: { id: string; url: string } };
+  const old = await prisma.media.create({ data: {
+    streamerId, filename: "remote-old", originalName: "Old image", mimeType: "image/remote",
+    type: "IMAGE", size: 0, url: "http://127.0.0.1/old.png", uploadedById: ownerId
+  } });
+  await prisma.previewElement.create({ data: {
+    streamerId, mediaId: safeMedia.media.id, type: "IMAGE", name: "Safe image",
+    src: safeMedia.media.url, x: 0, y: 0, width: 300, height: 200
+  } });
+  await prisma.previewElement.create({ data: {
+    streamerId, mediaId: old.id, type: "IMAGE", name: "Old image",
+    src: old.url, x: 320, y: 0, width: 300, height: 200
+  } });
+  const scene = await getPreviewState(streamerId);
+  expect(scene.map((element) => element.src)).toEqual([
+    "https://cdn.example.org/picture.png", "http://127.0.0.1/old.png"
+  ]);
+  expect(await prisma.media.findUnique({ where: { id: old.id } })).not.toBeNull();
+});
+
 describe("realtime access revocation", () => {
   it("changes canvas atomically for the Twitch owner and updates open editors and OBS", async () => {
     const realFetch = globalThis.fetch;

@@ -1,7 +1,7 @@
 import { FilePlus2, Link, Music, Trash2, Type, Upload, Video } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { MediaItem, MediaType } from "../../shared/types";
-import { detectMediaTypeFromUrl, getEbloPostId, getYouTubeVideoId } from "../../shared/mediaUrl";
+import { detectMediaTypeFromUrl, getEbloPostId, getYouTubeVideoId, isPublicHttpsMediaUrl, isRenderableMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 import { formatBytes } from "../utils";
 
 interface MediaLibraryProps {
@@ -55,6 +55,10 @@ export function MediaLibrary({
   async function submitUrl() {
     const trimmedUrl = url.trim();
     if (!trimmedUrl || addingUrl) return;
+    if (!isPublicHttpsMediaUrl(trimmedUrl)) {
+      setUrlError(unsafeMediaUrlMessage);
+      return;
+    }
     const type = detectMediaTypeFromUrl(trimmedUrl);
     if (!type && !getEbloPostId(trimmedUrl)) {
       setUrlError(
@@ -151,6 +155,7 @@ export function MediaLibrary({
           </p>
         )}
       </form>
+      <p className="media-inline-status">Внешние файлы загружаются напрямую браузером OBS. Сайт-источник может видеть IP-адрес устройства, на котором работает OBS.</p>
       {error && (
         <p className="media-inline-error" role="alert">
           {error}
@@ -215,13 +220,14 @@ export function MediaLibrary({
               <span>
                 {item.type} · {formatBytes(item.size)}
               </span>
+              {!isRenderableMediaUrl(item.url) && <span role="status">{unsafeMediaUrlMessage}</span>}
             </div>
             <button
               className="icon-button"
               type="button"
               title="Add to Canvas"
               aria-label={`Добавить ${item.originalName} на холст`}
-              disabled={!canPlace}
+              disabled={!canPlace || !isRenderableMediaUrl(item.url)}
               onClick={() => onAdd(item.id)}
             >
               <FilePlus2 size={16} />
@@ -249,6 +255,7 @@ export function MediaLibrary({
 
 function MediaThumbnail({ item }: { item: MediaItem }) {
   const [failed, setFailed] = useState(false);
+  if (!isRenderableMediaUrl(item.url)) return <Video size={18} />;
   const youtubeId = getYouTubeVideoId(item.url);
   if (failed) return item.type === "AUDIO" ? <Music size={18} /> : <Video size={18} />;
   if (item.type === "IMAGE" || item.type === "GIF" || youtubeId) {
