@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { Request } from "express";
 import { createCsrfTokenFromSessionToken } from "../src/server/auth";
-import { WindowRateLimiter, buildContentSecurityPolicy } from "../src/server/security";
+import { WindowRateLimiter, buildContentSecurityPolicy, clientIp } from "../src/server/security";
 
 describe("security primitives", () => {
   it("binds csrf tokens to the session token", () => {
@@ -18,6 +19,17 @@ describe("security primitives", () => {
     expect(limiter.consume("user")).toEqual({ allowed: true });
     expect(limiter.consume("user")).toMatchObject({ allowed: false });
     expect(limiter.consume("other")).toEqual({ allowed: true });
+  });
+
+  it("uses the socket address regardless of forwarded IP headers", () => {
+    const request = {
+      headers: { "x-forwarded-for": "203.0.113.1" },
+      socket: { remoteAddress: "::1" }
+    } as unknown as Request;
+
+    expect(clientIp(request)).toBe("::1");
+    request.headers["x-forwarded-for"] = "198.51.100.42";
+    expect(clientIp(request)).toBe("::1");
   });
 
   it("keeps external frames limited to YouTube and disallows HTTP media", () => {
