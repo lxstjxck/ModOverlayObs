@@ -190,7 +190,14 @@
 .lxst-auth-intro {
   min-width: 0;
 }
+.lxst-auth-intro h1,
+.lxst-dashboard-title-row h1 {
+  /* П and В begin 0.12em inside Montserrat Light; match the smaller copy's visible edge. */
+  --ui-title-ink-start: 0.12em;
+  text-indent: calc(var(--ui-copy-ink-start) - var(--ui-title-ink-start));
+}
 .lxst-auth-intro h1 {
+  --ui-copy-ink-start: 0.02em;
   max-width: 720px;
   margin: 0;
   font-size: clamp(54px, 6vw, 91px);
@@ -338,6 +345,7 @@
   min-width: 0;
 }
 .lxst-dashboard-title-row h1 {
+  --ui-copy-ink-start: 0.03em;
   margin: 0;
   font-size: clamp(46px, 5vw, 76px);
   font-weight: 300;

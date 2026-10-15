@@ -36,6 +36,9 @@
 }
 
 .ecosystem-hero h1 {
+  /* Montserrat Light at 100px: В starts at 12px, с at 5px. */
+  --hero-first-ink-start: 0.12em;
+  --hero-second-ink-start: 0.05em;
   max-width: 100%;
   margin: 0;
   font-size: var(--hero-title-size);
@@ -50,7 +53,7 @@
 }
 
 .ecosystem-hero h1 span:first-child {
-  translate: -0.03em 0;
+  translate: calc(var(--hero-second-ink-start) - var(--hero-first-ink-start)) 0;
 }
 
 .ecosystem-hero h1 em {
@@ -290,6 +293,11 @@
 
   .ecosystem-hero {
     --hero-title-size: clamp(56px, 7vw, 84px);
+  }
+}
+@media (min-width: 701px) {
+  .ecosystem-hero h1 {
+    translate: -0.02em 0;
   }
 }
 @media (max-width: 700px) {

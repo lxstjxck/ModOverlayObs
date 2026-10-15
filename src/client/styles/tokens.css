@@ -2,9 +2,9 @@
 :root {
   --ui-font: Montserrat, "Segoe UI", Arial, sans-serif;
   --ui-heading-tracking: normal;
-  --ui-display-tracking: -0.008em;
+  --ui-display-tracking: -0.004em;
   --ui-display-leading: 1.06;
-  --ui-section-tracking: -0.006em;
+  --ui-section-tracking: -0.002em;
   --ui-section-leading: 1.12;
   --ui-bg: #0b0b0e;
   --ui-surface: #101014;
