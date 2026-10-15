@@ -46,13 +46,13 @@
 }
 
 .ecosystem-hero h1 span {
-  translate: -0.045em 0;
+  translate: -0.105em 0;
   display: block;
   white-space: nowrap;
 }
 
 .ecosystem-hero h1 span:last-child {
-  translate: -0.09em 0;
+  translate: -0.035em 0;
 }
 
 
