@@ -170,8 +170,8 @@
   margin: 0;
   font-size: clamp(52px, 6.4vw, 104px);
   font-weight: 300;
-  letter-spacing: var(--ui-heading-tracking);
-  line-height: 1.04;
+  letter-spacing: var(--ui-display-tracking);
+  line-height: var(--ui-display-leading);
   white-space: nowrap;
 }
 @media (min-width: 1101px) {
@@ -567,8 +567,8 @@
   margin: 0;
   font-size: clamp(34px, 4.1vw, 62px);
   font-weight: 300;
-  line-height: 1.12;
-  letter-spacing: var(--ui-heading-tracking);
+  line-height: var(--ui-section-leading);
+  letter-spacing: var(--ui-section-tracking);
 }
 .landing-section-description {
   max-width: 590px;
@@ -677,8 +677,8 @@
   margin: 0;
   font-size: clamp(47px, 5.4vw, 80px);
   font-weight: 300;
-  line-height: 1.08;
-  letter-spacing: var(--ui-heading-tracking);
+  line-height: var(--ui-display-leading);
+  letter-spacing: var(--ui-display-tracking);
 }
 .landing-cta-inner > div:first-child > p:last-child {
   color: var(--ui-muted);
@@ -945,6 +945,20 @@
   }
   .landing-demo-dots {
     display: none;
+  }
+}
+
+@media (max-width: 320px) {
+  .landing-shell {
+    width: calc(100% - 24px);
+  }
+  .landing-hero h1,
+  .landing-cta h2 {
+    font-size: clamp(22px, 9vw, 30px);
+    white-space: normal;
+  }
+  .landing-section-heading h2 {
+    font-size: clamp(19px, 10vw, 32px);
   }
 }
 

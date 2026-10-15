@@ -40,14 +40,17 @@
   margin: 0;
   font-size: var(--hero-title-size);
   font-weight: 300;
-  font-kerning: normal;
-  letter-spacing: normal;
-  line-height: 1.07;
+  letter-spacing: var(--ui-display-tracking);
+  line-height: var(--ui-display-leading);
 }
 
 .ecosystem-hero h1 span {
   display: block;
   white-space: nowrap;
+}
+
+.ecosystem-hero h1 span:first-child {
+  translate: -0.03em 0;
 }
 
 .ecosystem-hero h1 em {
@@ -129,8 +132,8 @@
   margin: 0;
   font-size: clamp(35px, 4vw, 60px);
   font-weight: 300;
-  line-height: 1.15;
-  letter-spacing: var(--ui-heading-tracking);
+  line-height: var(--ui-section-leading);
+  letter-spacing: var(--ui-section-tracking);
 }
 
 .ecosystem-section-heading > p {
@@ -367,6 +370,21 @@
   .overlay-landing .landing-header-home {
     white-space: nowrap;
     font-size: 14px;
+  }
+}
+
+@media (max-width: 320px) {
+  .ecosystem-hero {
+    --hero-title-size: clamp(22px, 9vw, 30px);
+  }
+  .ecosystem-hero h1 {
+    width: 100%;
+  }
+  .ecosystem-hero h1 span:first-child {
+    white-space: normal;
+  }
+  .ecosystem-section-heading h2 {
+    font-size: clamp(19px, 10vw, 32px);
   }
 }
 

@@ -195,8 +195,8 @@
   margin: 0;
   font-size: clamp(54px, 6vw, 91px);
   font-weight: 300;
-  line-height: 1.06;
-  letter-spacing: var(--ui-heading-tracking);
+  line-height: var(--ui-display-leading);
+  letter-spacing: var(--ui-display-tracking);
 }
 .lxst-auth-intro h1 em {
   color: var(--ui-accent);
@@ -341,8 +341,8 @@
   margin: 0;
   font-size: clamp(46px, 5vw, 76px);
   font-weight: 300;
-  line-height: 1.1;
-  letter-spacing: var(--ui-heading-tracking);
+  line-height: var(--ui-display-leading);
+  letter-spacing: var(--ui-display-tracking);
 }
 .lxst-dashboard-lead {
   margin: var(--space-4) 0 0;
@@ -941,6 +941,12 @@
   }
 }
 
+@media (max-width: 1000px) {
+  .lxst-auth-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 760px) {
   .lxst-shell {
     width: min(100% - 36px, 600px);
@@ -1071,6 +1077,86 @@
     gap: 8px;
   }
   .lxst-save-options > div .lxst-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 320px) {
+  .lxst-shell {
+    width: calc(100% - 24px);
+  }
+  .lxst-auth-header,
+  .lxst-dashboard-header-inner {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-block: var(--space-3);
+  }
+  .lxst-auth-intro h1 {
+    font-size: clamp(24px, 12vw, 32px);
+  }
+  .lxst-auth-card,
+  .lxst-dashboard-intro,
+  .lxst-panel {
+    padding: var(--space-3);
+  }
+  .lxst-auth-card h2 {
+    font-size: clamp(18px, 10vw, 24px);
+  }
+  .lxst-dashboard-title-row h1 {
+    font-size: clamp(18px, 10vw, 30px);
+  }
+  .lxst-dashboard-account {
+    margin-left: 0;
+  }
+  .lxst-dashboard-toolbar .lxst-mode-switch {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lxst-mode-switch button {
+    min-width: 0;
+  }
+  .lxst-dashboard-toolbar .lxst-quiet-button {
+    width: 100%;
+  }
+  .lxst-panel-heading h2 {
+    font-size: clamp(18px, 9vw, 25px);
+  }
+  .lxst-panel-heading {
+    flex-wrap: wrap;
+  }
+  .lxst-overview-channel,
+  .lxst-list-person {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .lxst-secret-row {
+    flex-wrap: wrap;
+  }
+  .lxst-secret-row input {
+    flex-basis: 100%;
+  }
+  .lxst-obs-reload {
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .lxst-field-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .lxst-moderator-card {
+    width: 100%;
+    min-width: 0;
+    padding-inline: var(--space-2);
+  }
+  .lxst-moderators-refresh {
+    min-width: 0;
+  }
+  .lxst-access-toggle,
+  .lxst-moderators-refresh {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .lxst-access-toggle {
     width: 100%;
   }
 }
