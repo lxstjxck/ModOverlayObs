@@ -4,7 +4,8 @@ import { config } from "./config";
 import { prisma } from "./db";
 import { accessRevocation } from "./accessRevocation";
 
-const freshMs = 10_000;
+export const moderatorSnapshotFreshMs = 10_000;
+const freshMs = moderatorSnapshotFreshMs;
 const requiredScopes = ["moderation:read", "user:read:moderated_channels"];
 const refreshes = new Map<string, Promise<string>>();
 const syncs = new Map<string, Promise<Set<string>>>();
@@ -211,7 +212,7 @@ export async function syncModerators(channelId: string): Promise<Set<string>> {
   try { return await operation; } finally { syncs.delete(channelId); }
 }
 
-async function resolveChannelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<"owner" | "moderator" | null> {
+async function resolveChannelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string, moderatorIds?: ReadonlySet<string>): Promise<"owner" | "moderator" | null> {
   const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true, twitchBroadcasterId: true } });
   if (!channel) return null;
   if (session.authMethod === "LEGACY") {
@@ -233,6 +234,7 @@ async function resolveChannelRole(session: Session & { user: { id: string; twitc
       !(await verifyRecentIdentity(channel.ownerUserId, owner.twitchUserId, ownerConnection.expiresAt <= new Date()))) return null;
   const ban = await prisma.channelModeratorBan.findUnique({ where: { channelId_userId: { channelId, userId: session.user.id } } });
   if (ban) return null;
+  if (moderatorIds) return moderatorIds.has(session.user.twitchUserId) ? "moderator" : null;
   let snapshot = await prisma.channelModeratorSnapshot.findUnique({ where: { channelId } });
   if (!snapshot || Date.now() - snapshot.checkedAt.getTime() > freshMs) {
     await syncModerators(channelId);
@@ -242,8 +244,8 @@ async function resolveChannelRole(session: Session & { user: { id: string; twitc
   return (JSON.parse(snapshot.userIdsJson) as string[]).includes(session.user.twitchUserId) ? "moderator" : null;
 }
 
-export async function channelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string): Promise<"owner" | "moderator" | null> {
-  try { return await resolveChannelRole(session, channelId); }
+export async function channelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string, moderatorIds?: ReadonlySet<string>): Promise<"owner" | "moderator" | null> {
+  try { return await resolveChannelRole(session, channelId, moderatorIds); }
   catch { return null; }
 }
 

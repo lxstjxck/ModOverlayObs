@@ -16,7 +16,7 @@ import {
   hashSessionToken
 } from "./auth";
 import { accessRevocation } from "./accessRevocation";
-import { channelRole } from "./channelAccess";
+import { channelRole, moderatorSnapshotFreshMs, syncModerators } from "./channelAccess";
 import { withCanvasLock } from "./canvasSettings";
 import { config } from "./config";
 import { prisma } from "./db";
@@ -63,7 +63,90 @@ const socketEventLimiter = new WindowRateLimiter(300, 10_000);
 const socketTransformLimiter = new WindowRateLimiter(900, 10_000);
 const socketTransformBurstLimiter = new WindowRateLimiter(120, 1_000);
 const previewIdsByStreamer = new Map<string, Set<string>>();
+const accessRecheckMs = 5_000;
+const moderatorSyncDeadlineMs = 10_000;
 let canvasIo: Server | null = null;
+
+function revokeSocket(socket: Socket): void {
+  if (!socket.connected) return;
+  const context = contexts.get(socket);
+  if (context?.kind === "moderator") socket.leave(moderatorRoom(context.streamerId));
+  socket.emit("access:revoked");
+  socket.disconnect(true);
+}
+
+async function syncedModeratorIds(channelId: string): Promise<ReadonlySet<string> | null> {
+  let deadline: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      syncModerators(channelId),
+      new Promise<never>((_resolve, reject) => {
+        deadline = setTimeout(() => reject(new Error("Twitch moderator sync timed out")), moderatorSyncDeadlineMs);
+        deadline.unref();
+      })
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+async function revalidateModeratorSockets(io: Server): Promise<void> {
+  const byChannel = new Map<string, Array<{ socket: Socket; context: Extract<SocketContext, { kind: "moderator" }> }>>();
+  for (const socket of io.sockets.sockets.values()) {
+    const context = contexts.get(socket);
+    if (context?.kind !== "moderator") continue;
+    const entries = byChannel.get(context.streamerId) ?? [];
+    entries.push({ socket, context });
+    byChannel.set(context.streamerId, entries);
+  }
+
+  await Promise.all([...byChannel].map(async ([channelId, entries]) => {
+    try {
+      const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true } });
+      if (!channel) throw new Error("Channel unavailable");
+      const sessions = await Promise.all(entries.map(({ socket }) => getSessionFromCookieHeader(socket.handshake.headers.cookie)));
+      const needsModeratorList = sessions.some((session) =>
+        session?.authMethod === "TWITCH" && session.twitchMode === "unified" && session.userId !== channel.ownerUserId
+      );
+      let moderatorIds: ReadonlySet<string> | null = null;
+      let moderatorListExpiresAt = 0;
+      if (needsModeratorList) {
+        const snapshot = await prisma.channelModeratorSnapshot.findUnique({ where: { channelId } });
+        if (snapshot && Date.now() - snapshot.checkedAt.getTime() < moderatorSnapshotFreshMs) {
+          try {
+            const stored: unknown = JSON.parse(snapshot.userIdsJson);
+            if (Array.isArray(stored) && stored.every((id) => typeof id === "string")) {
+              moderatorIds = new Set(stored);
+              moderatorListExpiresAt = snapshot.checkedAt.getTime() + moderatorSnapshotFreshMs;
+            }
+          } catch {
+            // Refresh a malformed snapshot; a missing roster cannot authorize moderators.
+          }
+        }
+        if (!moderatorIds) {
+          moderatorIds = await syncedModeratorIds(channelId);
+          if (moderatorIds) moderatorListExpiresAt = Date.now() + moderatorSnapshotFreshMs;
+        }
+      }
+
+      await Promise.all(entries.map(async ({ socket, context }, index) => {
+        if (!socket.connected) return;
+        const session = sessions[index];
+        const twitchModerator = session?.authMethod === "TWITCH" && session.userId !== channel.ownerUserId;
+        if (!session || session.userId !== context.user.id ||
+            (twitchModerator && (!moderatorIds || Date.now() >= moderatorListExpiresAt)) ||
+            !(await channelRole(session, channelId, moderatorIds ?? undefined)) ||
+            (twitchModerator && Date.now() >= moderatorListExpiresAt)) {
+          revokeSocket(socket);
+        }
+      }));
+    } catch {
+      for (const { socket } of entries) revokeSocket(socket);
+    }
+  }));
+}
 
 export async function broadcastCanvasState(streamerId: string): Promise<void> {
   if (!canvasIo) return;
@@ -78,13 +161,6 @@ export function requestOverlayReload(streamerId: string) {
     .filter((socket): socket is Socket => Boolean(socket));
   return overlayReload.start(streamerId, sockets);
 }
-
-setInterval(() => {
-  socketConnectionLimiter.prune();
-  socketEventLimiter.prune();
-  socketTransformLimiter.prune();
-  socketTransformBurstLimiter.prune();
-}, 60_000).unref();
 
 export function configureSocket(httpServer: HttpServer): Server {
   const io = new Server(httpServer, {
@@ -111,8 +187,7 @@ export function configureSocket(httpServer: HttpServer): Server {
     let expiryTimer: NodeJS.Timeout | undefined;
     const revoke = () => {
       revoked = true;
-      socket.emit("access:revoked");
-      socket.disconnect(true);
+      revokeSocket(socket);
     };
     const onSessionRevoked = (hash: string) => {
       if (hash === sessionHash) revoke();
@@ -230,11 +305,31 @@ export function configureSocket(httpServer: HttpServer): Server {
   });
 
   void restoreLiveTimers(io);
+  const limiterCleanupTimer = setInterval(() => {
+    socketConnectionLimiter.prune();
+    socketEventLimiter.prune();
+    socketTransformLimiter.prune();
+    socketTransformBurstLimiter.prune();
+  }, 60_000).unref();
+  let accessRecheckRunning = false;
+  const accessRecheckTimer = setInterval(() => {
+    if (accessRecheckRunning) return;
+    accessRecheckRunning = true;
+    void revalidateModeratorSockets(io)
+      .catch(() => {
+        for (const socket of io.sockets.sockets.values()) {
+          if (contexts.get(socket)?.kind === "moderator") revokeSocket(socket);
+        }
+      })
+      .finally(() => { accessRecheckRunning = false; });
+  }, accessRecheckMs).unref();
   const cleanupTimer = setInterval(() => {
     void cleanupExpiredAndBroadcast(io);
   }, 5_000).unref();
   httpServer.once("close", () => {
     if (canvasIo === io) canvasIo = null;
+    clearInterval(limiterCleanupTimer);
+    clearInterval(accessRecheckTimer);
     clearInterval(cleanupTimer);
     clearAllTimers();
   });

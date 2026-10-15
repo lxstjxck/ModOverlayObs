@@ -99,12 +99,12 @@ async function addSession(
   await prisma.session.create({ data: { userId, tokenHash: hashSessionToken(token), expiresAt } });
 }
 
-function event<T = unknown>(socket: Socket, name: string): Promise<T> {
+function event<T = unknown>(socket: Socket, name: string, timeoutMs = 4000): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off(name, listener);
       reject(new Error(`Timeout waiting for ${name}`));
-    }, 4000);
+    }, timeoutMs);
     const listener = (payload: T) => {
       clearTimeout(timer);
       resolve(payload);
@@ -982,6 +982,128 @@ it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates 
   expect((await fetch(`${baseUrl}/uploads/foreign.png?overlayToken=foreign-token`, { headers: headers("twitch-mod") })).status).toBe(200);
   expect((await fetch(`${baseUrl}/api/media`, { headers: { ...headers(), "x-channel-id": second.id } })).status).toBe(403);
 });
+
+async function prepareSocketRecheckChannel(moderatorTwitchIds: string[]) {
+  const ownerTwitchId = "101";
+  const ids = [ownerTwitchId, ...moderatorTwitchIds];
+  const accounts = await Promise.all(ids.map(async (id) => {
+    const user = await prisma.user.create({ data: {
+      username: `twitch:${id}`, displayName: `Twitch ${id}`, passwordHash: "!", twitchUserId: id
+    } });
+    await prisma.twitchOAuthConnection.create({ data: {
+      userId: user.id, mode: "unified", encryptedAccess: encryptOAuthToken(`access-${id}`),
+      encryptedRefresh: encryptOAuthToken(`refresh-${id}`), scopesJson: JSON.stringify(["moderation:read", "user:read:moderated_channels"]),
+      expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date()
+    } });
+    await prisma.session.create({ data: {
+      userId: user.id, tokenHash: hashSessionToken(`session-${id}`), authMethod: "TWITCH",
+      twitchMode: "unified", expiresAt: new Date(Date.now() + 3600_000)
+    } });
+    return user;
+  }));
+  await prisma.streamer.update({ where: { id: streamerId }, data: {
+    ownerUserId: accounts[0].id, twitchBroadcasterId: ownerTwitchId
+  } });
+  const members = new Set(moderatorTwitchIds);
+  let unavailable = false;
+  let listCalls = 0;
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url === "https://id.twitch.tv/oauth2/validate") {
+      const token = new Headers(init?.headers).get("Authorization")?.replace("OAuth access-", "");
+      return Promise.resolve(new Response(JSON.stringify({ client_id: config.twitchClientId, user_id: token,
+        scopes: ["moderation:read", "user:read:moderated_channels"] })));
+    }
+    if (url.startsWith("https://api.twitch.tv/helix/moderation/moderators?")) {
+      listCalls++;
+      return Promise.resolve(unavailable
+        ? new Response(null, { status: 503 })
+        : new Response(JSON.stringify({ data: [...members].map((user_id) => ({ user_id })), pagination: {} })));
+    }
+    return realFetch(input, init);
+  });
+  await syncModerators(streamerId);
+  return { owner: accounts[0], moderators: accounts.slice(1), members,
+    setUnavailable: (value: boolean) => { unavailable = value; }, getListCalls: () => listCalls };
+}
+
+it("automatically removes idle Twitch moderator sockets while keeping valid members, owner and OBS", async () => {
+  const access = await prepareSocketRecheckChannel(["201", "202"]);
+  const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+  const ownerSocket = await socketClient({ session: "session-101", channelId: streamerId });
+  const removedOne = await socketClient({ session: "session-201", channelId: streamerId });
+  const removedTwo = await socketClient({ session: "session-201", channelId: streamerId });
+  const remaining = await socketClient({ session: "session-202", channelId: streamerId });
+  const removed = [removedOne, removedTwo].map((socket) => Promise.all([
+    event(socket, "access:revoked", 8000), event(socket, "disconnect", 8000)
+  ]));
+  access.members.delete("201");
+  const callsBefore = access.getListCalls();
+  await prisma.channelModeratorSnapshot.update({ where: { channelId: streamerId },
+    data: { checkedAt: new Date(Date.now() - 11_000) } });
+  await Promise.all(removed);
+  expect(access.getListCalls()).toBe(callsBefore + 1);
+  expect(ownerSocket.connected).toBe(true);
+  expect(remaining.connected).toBe(true);
+  expect(overlay.connected).toBe(true);
+
+  let leakedStates = 0;
+  let leakedLive = 0;
+  let leakedPresence = 0;
+  removedOne.on("preview:state", () => leakedStates++);
+  removedTwo.on("preview:state", () => leakedStates++);
+  for (const socket of [removedOne, removedTwo]) {
+    socket.on("live:state", () => leakedLive++);
+    socket.on("presence:update", () => leakedPresence++);
+  }
+  const received = event<Array<{ id: string; text: string }>>(remaining, "preview:state");
+  ownerSocket.emit("preview:add", { type: "TEXT", text: "still authorized" });
+  const preview = await received;
+  expect(preview).toContainEqual(expect.objectContaining({ text: "still authorized" }));
+  const liveReceived = event<Array<{ previewElementId: string }>>(remaining, "live:state");
+  ownerSocket.emit("live:show", { previewId: preview[0].id });
+  expect(await liveReceived).toContainEqual(expect.objectContaining({ previewElementId: preview[0].id }));
+  const presenceReceived = event(remaining, "presence:update");
+  overlay.disconnect();
+  await presenceReceived;
+  expect(leakedStates).toBe(0);
+  expect(leakedLive).toBe(0);
+  expect(leakedPresence).toBe(0);
+  await socketClient({ session: "session-201", channelId: streamerId }, "connect_error");
+
+  const banned = Promise.all([event(remaining, "access:revoked"), event(remaining, "disconnect")]);
+  await setModeratorBan(streamerId, access.owner.id, access.moderators[1].id, true);
+  await banned;
+  expect(ownerSocket.connected).toBe(true);
+}, 20_000);
+
+it("fails closed on a stale Twitch list and rechecks idle sessions and owner OAuth", async () => {
+  const access = await prepareSocketRecheckChannel(["201"]);
+  const ownerSocket = await socketClient({ session: "session-101", channelId: streamerId });
+  const moderatorSocket = await socketClient({ session: "session-201", channelId: streamerId });
+  const legacySocket = await socketClient({ session: "owner-session" });
+  const deniedModerator = Promise.all([
+    event(moderatorSocket, "access:revoked", 8000), event(moderatorSocket, "disconnect", 8000)
+  ]);
+  const deniedLegacy = Promise.all([
+    event(legacySocket, "access:revoked", 8000), event(legacySocket, "disconnect", 8000)
+  ]);
+  access.setUnavailable(true);
+  await prisma.channelModeratorSnapshot.update({ where: { channelId: streamerId },
+    data: { checkedAt: new Date(Date.now() - 11_000) } });
+  await prisma.session.deleteMany({ where: { tokenHash: hashSessionToken("owner-session") } });
+  await Promise.all([deniedModerator, deniedLegacy]);
+  expect(ownerSocket.connected).toBe(true);
+  await socketClient({ session: "session-201", channelId: streamerId }, "connect_error");
+
+  const deniedOwner = Promise.all([
+    event(ownerSocket, "access:revoked", 8000), event(ownerSocket, "disconnect", 8000)
+  ]);
+  await prisma.twitchOAuthConnection.update({ where: { userId_mode: { userId: access.owner.id, mode: "unified" } },
+    data: { revokedAt: new Date() } });
+  await deniedOwner;
+}, 20_000);
 
 it("rejects denied, expired and underscoped Twitch callbacks without creating a session", async () => {
   config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
