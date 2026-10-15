@@ -93,7 +93,7 @@
 }
 .moderator-app .presence-copy strong {
   color: var(--ui-ink);
-  font-size: 10px;
+  font-size: 12px;
 }
 .moderator-app .presence.online .status-light {
   background: var(--ui-accent);
@@ -132,7 +132,7 @@
   background: var(--ui-surface);
   text-decoration: none;
   color: var(--ui-ink);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
 }
@@ -205,7 +205,7 @@
 .moderator-app .media-selection-count {
   grid-column: 1 / -1;
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .moderator-app .media-bulk-actions {
   gap: var(--space-2);
@@ -219,12 +219,12 @@
 .moderator-app .media-inline-error {
   margin: 0 0 var(--space-2);
   color: #f2a9ba;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.5;
 }
 .moderator-app .media-inline-status {
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .moderator-app .media-row {
   border-color: var(--ui-border);
@@ -244,10 +244,10 @@
   color: var(--ui-accent);
 }
 .moderator-app .media-meta strong {
-  font-size: 11px;
+  font-size: 13px;
 }
 .moderator-app .media-meta span {
-  font-size: 10px;
+  font-size: 12px;
 }
 .moderator-app .media-select {
   accent-color: var(--ui-accent);
@@ -315,7 +315,7 @@
   color: var(--ui-ink);
   font-size: 19px;
   font-weight: 600;
-  letter-spacing: -0.045em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .moderator-app .workspace-heading-actions {
   display: flex;
@@ -327,7 +327,7 @@
 .moderator-app .properties-toggle {
   min-height: var(--space-6);
   padding-inline: var(--space-3);
-  font-size: 11px;
+  font-size: 13px;
 }
 .moderator-app .canvas-resolution {
   border-color: var(--ui-border);

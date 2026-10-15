@@ -1,6 +1,7 @@
 /* Shared palette for the public interface and upcoming screen redesigns. */
 :root {
   --ui-font: Montserrat, "Segoe UI", Arial, sans-serif;
+  --ui-heading-tracking: normal;
   --ui-bg: #0b0b0e;
   --ui-surface: #101014;
   --ui-surface-raised: #17171e;

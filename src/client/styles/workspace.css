@@ -39,7 +39,9 @@
   min-height: 100%;
   background: var(--ui-bg);
   color: var(--ui-ink);
-  font: 400 14px/1.6 var(--ui-font);
+  font: 400 16px/1.6 var(--ui-font);
+  font-kerning: normal;
+  font-synthesis: none;
 }
 .lxst-auth-page *,
 .lxst-dashboard * {
@@ -79,7 +81,7 @@
   padding: var(--space-2) var(--space-4);
   border: 1px solid var(--ui-border-accent);
   border-radius: var(--ui-radius-sm);
-  font: 650 13px/1.3 var(--ui-font);
+  font: 650 15px/1.3 var(--ui-font);
   text-align: left;
   transition:
     transform var(--ui-duration-fast) var(--ui-ease),
@@ -114,7 +116,7 @@
   gap: 8px;
   min-width: 0;
   color: #c7c2d0;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
   letter-spacing: 0.035em;
 }
@@ -129,7 +131,7 @@
   border-radius: var(--ui-radius-sm);
   background: #0c0c10;
   color: var(--ui-ink);
-  font: 500 13px/1.3 var(--ui-font);
+  font: 500 15px/1.3 var(--ui-font);
 }
 .lxst-field input::placeholder {
   color: #74717f;
@@ -145,12 +147,12 @@
   border-radius: var(--ui-radius-sm);
   background: #2c1b27;
   color: #ffe0e8;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.55;
 }
 .lxst-muted {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.7;
 }
 
@@ -171,7 +173,7 @@
   align-items: center;
   gap: var(--space-2);
   color: #b3adbf !important;
-  font-size: 12px;
+  font-size: 14px;
   transition: color var(--ui-duration-fast) ease;
 }
 .lxst-back-link:hover {
@@ -194,7 +196,7 @@
   font-size: clamp(54px, 6vw, 91px);
   font-weight: 300;
   line-height: 1.06;
-  letter-spacing: -0.072em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .lxst-auth-intro h1 em {
   color: var(--ui-accent);
@@ -204,7 +206,7 @@
   max-width: 470px;
   margin: var(--space-5) 0 0;
   color: var(--ui-muted);
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.8;
 }
 .lxst-auth-aside {
@@ -216,7 +218,7 @@
   padding-top: var(--space-5);
   border-top: 1px solid var(--ui-border);
   color: #a29bac;
-  font-size: 12px;
+  font-size: 14px;
 }
 .lxst-auth-aside svg {
   color: var(--ui-accent);
@@ -235,7 +237,7 @@
   align-items: center;
   justify-content: space-between;
   color: var(--ui-accent);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.14em;
 }
@@ -243,12 +245,12 @@
   margin: var(--space-6) 0 var(--space-2);
   font-size: 31px;
   font-weight: 500;
-  letter-spacing: -0.052em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .lxst-auth-card > p {
   margin: 0 0 var(--space-5);
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.75;
 }
 .lxst-auth-card .lxst-button {
@@ -263,7 +265,7 @@
   padding-top: var(--space-5);
   border-top: 1px solid var(--ui-border);
   color: #918b9b;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-auth-legacy a:hover,
 .lxst-auth-footer a:hover {
@@ -276,7 +278,7 @@
   padding-block: var(--space-5);
   border-top: 1px solid var(--ui-border);
   color: #807b89;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-auth-footer a {
   color: #b7a8d4;
@@ -311,7 +313,7 @@
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
   color: #c5c0cd;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-dashboard .lxst-header-logout:hover,
 .lxst-dashboard .lxst-quiet-button:hover {
@@ -340,12 +342,12 @@
   font-size: clamp(46px, 5vw, 76px);
   font-weight: 300;
   line-height: 1.1;
-  letter-spacing: -0.065em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .lxst-dashboard-lead {
   margin: var(--space-4) 0 0;
   color: var(--ui-muted);
-  font-size: 14px;
+  font-size: 16px;
 }
 .lxst-dashboard-account {
   display: flex;
@@ -368,7 +370,7 @@
   max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 11px;
+  font-size: 13px;
   white-space: nowrap;
 }
 .lxst-dashboard-account small {
@@ -376,7 +378,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ui-muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 .lxst-avatar {
   width: 37px;
@@ -413,7 +415,7 @@
   gap: 16px;
   margin-top: var(--space-5);
   color: #888390;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-mode-switch {
   display: inline-flex;
@@ -431,7 +433,7 @@
   border-radius: var(--ui-radius-pill);
   background: transparent;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   transition: background var(--ui-duration-fast) ease, color var(--ui-duration-fast) ease;
 }
@@ -471,7 +473,7 @@
   font-size: 27px;
   font-weight: 500;
   line-height: 1.25;
-  letter-spacing: -0.05em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .lxst-overview,
 .lxst-moderators {
@@ -496,7 +498,7 @@
 .lxst-obs-link-message {
   margin: var(--space-2) 0;
   color: var(--ui-accent-strong);
-  font-size: 12px;
+  font-size: 14px;
 }
 .lxst-obs-link-message[role="alert"] { color: #f0a6a6; }
 .lxst-obs-reload-row {
@@ -535,7 +537,7 @@
   border-radius: var(--ui-radius-sm);
   background: #211b2c;
   color: #eee8f6;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
   opacity: 0;
   visibility: hidden;
@@ -574,7 +576,7 @@
 .lxst-overview-channel small,
 .lxst-overview-stat small {
   color: #8d8697;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.12em;
 }
@@ -594,7 +596,7 @@
 .lxst-overview-stat > span:last-child {
   max-width: 250px;
   color: #8e8a97;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.6;
 }
 .lxst-status {
@@ -608,7 +610,7 @@
   border-radius: var(--ui-radius-pill);
   background: #211e27;
   color: #bcb7c3;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
 }
@@ -665,13 +667,13 @@
   min-height: 27px;
   margin-top: var(--space-1);
   color: #a3ddbf;
-  font-size: 10px;
+  font-size: 12px;
 }
 .lxst-obs-steps {
   margin: 12px 0 0;
   padding-left: var(--space-4);
   color: #b8b3c0;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 2;
 }
 .lxst-search-field {
@@ -699,7 +701,7 @@
 }
 .lxst-list-person strong {
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 .lxst-access-toggle {
@@ -713,7 +715,7 @@
   border-radius: var(--ui-radius-sm);
   background: transparent;
   color: inherit;
-  font-size: 11px;
+  font-size: 13px;
   cursor: pointer;
   transition: background-color 240ms ease, border-color 240ms ease, color 240ms ease;
 }
@@ -781,7 +783,7 @@
   border: 1px dashed #51465f;
   border-radius: var(--ui-radius-sm);
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.7;
 }
 .lxst-field-pair {
@@ -813,7 +815,7 @@
 .lxst-save-options p {
   margin: 0 0 12px;
   color: #c0b9c9;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.7;
 }
 .lxst-save-options > div {
@@ -835,7 +837,7 @@
   align-items: center;
   gap: 8px;
   color: #9e98a7;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-tts-status strong {
   color: var(--ui-ink);
@@ -865,7 +867,7 @@
 }
 .lxst-success {
   color: #a3ddbf;
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-channels {
   margin-top: var(--space-4);
@@ -900,12 +902,12 @@
   overflow-wrap: anywhere;
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.035em;
+  letter-spacing: var(--ui-heading-tracking);
 }
 .lxst-channel-card p {
   margin: 0 0 var(--space-4);
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 .lxst-channel-card .lxst-button {
   margin-top: auto;
@@ -955,7 +957,7 @@
     font-size: clamp(44px, 10vw, 64px);
   }
   .lxst-auth-intro > p:last-of-type {
-    font-size: 13px;
+    font-size: 15px;
   }
   .lxst-auth-aside {
     margin-top: var(--space-5);
@@ -1025,7 +1027,7 @@
 
 @media (max-width: 450px) {
   .lxst-brand {
-    font-size: 15px;
+    font-size: 17px;
   }
   .lxst-brand-icon {
     width: 32px;
@@ -1042,7 +1044,7 @@
     font-size: 26px;
   }
   .lxst-back-link {
-    font-size: 10px;
+    font-size: 12px;
   }
   .lxst-dashboard-title-row h1 {
     font-size: 40px;
@@ -1050,8 +1052,15 @@
   .lxst-dashboard-toolbar {
     flex-wrap: wrap;
   }
+  .lxst-dashboard-toolbar .lxst-mode-switch {
+    flex-basis: 100%;
+  }
   .lxst-dashboard-toolbar .lxst-quiet-button {
     margin-left: auto;
+  }
+  .lxst-moderators .lxst-panel-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
   .lxst-list-row {
     align-items: flex-start;
