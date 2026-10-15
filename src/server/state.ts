@@ -1,10 +1,102 @@
 import type { LiveInstance, Media, PreviewElement, Streamer, User } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import type { MediaItem, OverlayElement, StreamerView } from "../shared/types";
+import { sceneLimits } from "../shared/sceneLimits";
+import { elementPropsObjectSchema, elementPropsSchema } from "../shared/validation";
 import { prisma } from "./db";
 
 type PreviewPatch = Partial<Omit<OverlayElement, "id" | "previewElementId" | "props">> & {
   props?: Record<string, unknown>;
 };
+
+type SceneKind = "preview" | "live";
+type SceneDb = Prisma.TransactionClient;
+
+export class SceneLimitError extends Error {}
+export const maxLegacySceneBroadcastBytes = 4 * 1024 * 1024;
+
+function bytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+export function sceneStateBytes(elements: OverlayElement[]): number {
+  return bytes(elements);
+}
+
+export async function sceneNeedsRepair(streamerId: string, kind: SceneKind): Promise<boolean> {
+  const summary = kind === "preview"
+    ? await prisma.$queryRaw<Array<{ total: bigint }>>`
+        SELECT COALESCE(SUM(LENGTH(CAST(name AS BLOB)) + LENGTH(CAST(COALESCE(text, '') AS BLOB)) +
+          LENGTH(CAST(COALESCE(src, '') AS BLOB)) + LENGTH(CAST(propsJson AS BLOB)) + 1024), 0) AS total
+        FROM PreviewElement WHERE streamerId = ${streamerId}`
+    : await prisma.$queryRaw<Array<{ total: bigint }>>`
+        SELECT COALESCE(SUM(LENGTH(CAST(name AS BLOB)) + LENGTH(CAST(COALESCE(text, '') AS BLOB)) +
+          LENGTH(CAST(COALESCE(src, '') AS BLOB)) + LENGTH(CAST(propsJson AS BLOB)) + 1024), 0) AS total
+        FROM LiveInstance WHERE streamerId = ${streamerId}`;
+  return Number(summary[0]?.total ?? 0) > maxLegacySceneBroadcastBytes;
+}
+
+export async function getSceneRepairItems(streamerId: string, kind: SceneKind) {
+  const rows = kind === "preview"
+    ? await prisma.$queryRaw<Array<{ id: string; name: string }>>`
+        SELECT id, SUBSTR(name, 1, 80) AS name FROM PreviewElement
+        WHERE streamerId = ${streamerId} ORDER BY createdAt ASC LIMIT 100`
+    : await prisma.$queryRaw<Array<{ id: string; name: string }>>`
+        SELECT id, SUBSTR(name, 1, 80) AS name FROM LiveInstance
+        WHERE streamerId = ${streamerId} ORDER BY createdAt ASC LIMIT 100`;
+  return rows;
+}
+
+export async function sceneSnapshot(tx: SceneDb, streamerId: string, kind: SceneKind) {
+  const rows = kind === "preview"
+    ? await tx.previewElement.findMany({ where: { streamerId } })
+    : await tx.liveInstance.findMany({ where: { streamerId } });
+  const elements = rows.map((row) => kind === "preview"
+    ? previewToElement(row as PreviewElement) : liveToElement(row as LiveInstance));
+  return {
+    count: elements.length,
+    bytes: bytes(elements),
+    elements: new Map(elements.map((element, index) => [element.id, {
+      bytes: bytes(element), propsBytes: Buffer.byteLength(rows[index].propsJson, "utf8")
+    }]))
+  };
+}
+
+export async function checkedSceneMutation<T>(
+  streamerId: string,
+  kind: SceneKind,
+  action: (tx: SceneDb) => Promise<T>
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    const before = await sceneSnapshot(tx, streamerId, kind);
+    const result = await action(tx);
+    const after = await sceneSnapshot(tx, streamerId, kind);
+    assertSceneBudgetChange(before, after, kind);
+    return result;
+  }, { isolationLevel: "Serializable", timeout: 30_000 });
+}
+
+export function assertSceneBudgetChange(
+  before: Awaited<ReturnType<typeof sceneSnapshot>>,
+  after: Awaited<ReturnType<typeof sceneSnapshot>>,
+  kind: SceneKind
+): void {
+    const countLimit = kind === "preview" ? sceneLimits.previewElements : sceneLimits.liveInstances;
+    const byteLimit = kind === "preview" ? sceneLimits.previewBytes : sceneLimits.liveBytes;
+    if (after.count > countLimit && after.count > before.count) {
+      throw new SceneLimitError("Достигнут лимит элементов сцены. Удалите ненужные элементы, чтобы добавить новые.");
+    }
+    if (after.bytes > byteLimit && after.bytes > before.bytes) {
+      throw new SceneLimitError("Достигнут лимит размера данных сцены. Удалите или сократите элементы.");
+    }
+    for (const [id, current] of after.elements) {
+      const previous = before.elements.get(id);
+      if ((current.bytes > sceneLimits.elementBytes && current.bytes > (previous?.bytes ?? 0)) ||
+          (current.propsBytes > sceneLimits.propsBytes && current.propsBytes > (previous?.propsBytes ?? 0))) {
+        throw new SceneLimitError("Размер данных элемента превышает допустимый лимит.");
+      }
+    }
+}
 
 export async function getDefaultStreamer(): Promise<Streamer> {
   const streamer = await prisma.streamer.findFirst({ orderBy: { createdAt: "asc" } });
@@ -147,13 +239,14 @@ export async function createPreviewElement(
     emote?: { name: string; sourceUrl: string; width?: number; height?: number };
   }
 ): Promise<OverlayElement> {
-  const zIndex = await nextPreviewZIndex(streamerId);
+  return checkedSceneMutation(streamerId, "preview", async (tx) => {
+  const zIndex = await nextPreviewZIndex(tx, streamerId);
   if (payload.emote) {
     const { name, sourceUrl, width: nativeWidth, height: nativeHeight } = payload.emote;
     const ratio = nativeWidth && nativeHeight ? nativeWidth / nativeHeight : 1;
     const width = Math.round(ratio >= 1 ? 200 : 200 * ratio);
     const height = Math.round(ratio >= 1 ? 200 / ratio : 200);
-    const created = await prisma.previewElement.create({
+    const created = await tx.previewElement.create({
       data: {
         streamerId,
         type: "IMAGE",
@@ -170,7 +263,7 @@ export async function createPreviewElement(
     return previewToElement(created);
   }
   if (payload.mediaId) {
-    const media = await prisma.media.findFirstOrThrow({
+    const media = await tx.media.findFirstOrThrow({
       where: { id: payload.mediaId, streamerId }
     });
     const isPortrait = media.width && media.height ? media.height > media.width : false;
@@ -184,7 +277,7 @@ export async function createPreviewElement(
       (media.type === "AUDIO" ? 120 : media.type === "VIDEO" ? 270 : isPortrait ? 360 : 240);
     const x = payload.x ?? -width - 56;
     const y = payload.y ?? 120;
-    const created = await prisma.previewElement.create({
+    const created = await tx.previewElement.create({
       data: {
         streamerId,
         mediaId: media.id,
@@ -209,7 +302,7 @@ export async function createPreviewElement(
     return previewToElement(created);
   }
 
-  const created = await prisma.previewElement.create({
+  const created = await tx.previewElement.create({
     data: {
       streamerId,
       type: "TEXT",
@@ -235,6 +328,7 @@ export async function createPreviewElement(
     }
   });
   return previewToElement(created);
+  });
 }
 
 export async function updatePreviewElement(
@@ -242,21 +336,31 @@ export async function updatePreviewElement(
   id: string,
   patch: PreviewPatch
 ): Promise<OverlayElement> {
+  return checkedSceneMutation(streamerId, "preview", async (tx) => {
   const data = patchToPrisma(patch);
-  const updated = await prisma.previewElement.update({
+  if (patch.props) {
+    const existing = await tx.previewElement.findUniqueOrThrow({ where: { id, streamerId } });
+    if (Buffer.byteLength(existing.propsJson, "utf8") > 64 * 1024) {
+      throw new SceneLimitError("Старые данные элемента слишком велики. Удалите элемент после создания резервной копии сцены.");
+    }
+    data.propsJson = JSON.stringify({ ...parseRawProps(existing.propsJson), ...patch.props });
+  }
+  const updated = await tx.previewElement.update({
     where: { id, streamerId },
     data
   });
   return previewToElement(updated);
+  });
 }
 
 export async function duplicatePreviewElement(
   streamerId: string,
   id: string
 ): Promise<OverlayElement> {
-  const source = await prisma.previewElement.findFirstOrThrow({ where: { id, streamerId } });
-  const zIndex = await nextPreviewZIndex(streamerId);
-  const created = await prisma.previewElement.create({
+  return checkedSceneMutation(streamerId, "preview", async (tx) => {
+  const source = await tx.previewElement.findFirstOrThrow({ where: { id, streamerId } });
+  const zIndex = await nextPreviewZIndex(tx, streamerId);
+  const created = await tx.previewElement.create({
     data: {
       streamerId,
       mediaId: source.mediaId,
@@ -284,6 +388,7 @@ export async function duplicatePreviewElement(
     }
   });
   return previewToElement(created);
+  });
 }
 
 export async function removePreviewElement(streamerId: string, id: string): Promise<void> {
@@ -294,12 +399,13 @@ export async function showPreviewElementLive(
   streamerId: string,
   previewId: string
 ): Promise<OverlayElement> {
-  const source = await prisma.previewElement.findFirstOrThrow({
+  return checkedSceneMutation(streamerId, "live", async (tx) => {
+  const source = await tx.previewElement.findFirstOrThrow({
     where: { id: previewId, streamerId }
   });
   const startedAt = new Date();
   const endsAt = source.durationMs ? new Date(startedAt.getTime() + source.durationMs) : null;
-  const created = await prisma.liveInstance.create({
+  const created = await tx.liveInstance.create({
     data: {
       streamerId,
       previewElementId: source.id,
@@ -329,6 +435,7 @@ export async function showPreviewElementLive(
     }
   });
   return liveToElement(created);
+  });
 }
 
 export async function updateLiveFromPreview(
@@ -337,8 +444,9 @@ export async function updateLiveFromPreview(
   previewId?: string,
   patch?: PreviewPatch
 ): Promise<OverlayElement> {
+  return checkedSceneMutation(streamerId, "live", async (tx) => {
   const source = previewId
-    ? await prisma.previewElement.findFirstOrThrow({ where: { id: previewId, streamerId } })
+    ? await tx.previewElement.findFirstOrThrow({ where: { id: previewId, streamerId } })
     : null;
 
   const data = source
@@ -368,11 +476,20 @@ export async function updateLiveFromPreview(
       }
     : patchToPrisma(patch ?? {});
 
-  const updated = await prisma.liveInstance.update({
+  if (!source && patch?.props) {
+    const existing = await tx.liveInstance.findUniqueOrThrow({ where: { id: liveId, streamerId } });
+    if (Buffer.byteLength(existing.propsJson, "utf8") > 64 * 1024) {
+      throw new SceneLimitError("Старые данные элемента слишком велики. Удалите элемент после создания резервной копии сцены.");
+    }
+    data.propsJson = JSON.stringify({ ...parseRawProps(existing.propsJson), ...patch.props });
+  }
+
+  const updated = await tx.liveInstance.update({
     where: { id: liveId, streamerId },
     data
   });
   return liveToElement(updated);
+  });
 }
 
 export async function removeLiveInstance(streamerId: string, id: string): Promise<void> {
@@ -418,8 +535,9 @@ export async function writeAudit(
   });
 }
 
-function parseProps(raw: string): Record<string, unknown> {
+function parseRawProps(raw: string): Record<string, unknown> {
   try {
+    if (Buffer.byteLength(raw, "utf8") > 64 * 1024) return {};
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
@@ -427,6 +545,28 @@ function parseProps(raw: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+function parseProps(raw: string): Record<string, unknown> {
+  const parsed = parseRawProps(raw);
+  const safe: Record<string, unknown> = {};
+  const shape = elementPropsObjectSchema.shape as Record<string, { safeParse: (value: unknown) => { success: boolean } }>;
+  for (const [key, value] of Object.entries(parsed)) {
+    if (Object.hasOwn(shape, key) && shape[key].safeParse(value).success) safe[key] = value;
+  }
+  return elementPropsSchema.safeParse(safe).success ? safe : {};
+}
+
+export async function hasLegacySceneProps(streamerId: string): Promise<boolean> {
+  const [previews, live] = await Promise.all([
+    prisma.previewElement.findMany({ where: { streamerId }, select: { propsJson: true } }),
+    prisma.liveInstance.findMany({ where: { streamerId }, select: { propsJson: true } })
+  ]);
+  return [...previews, ...live].some(({ propsJson }) => {
+    if (Buffer.byteLength(propsJson, "utf8") > sceneLimits.propsBytes) return true;
+    return !elementPropsSchema.safeParse(parseRawProps(propsJson)).success ||
+      Object.keys(parseRawProps(propsJson)).length !== Object.keys(parseProps(propsJson)).length;
+  });
 }
 
 function parseAnimation(value: string): OverlayElement["animationIn"] {
@@ -475,8 +615,8 @@ function patchToPrisma(patch: PreviewPatch) {
   return data;
 }
 
-async function nextPreviewZIndex(streamerId: string): Promise<number> {
-  const result = await prisma.previewElement.aggregate({
+async function nextPreviewZIndex(tx: SceneDb, streamerId: string): Promise<number> {
+  const result = await tx.previewElement.aggregate({
     where: { streamerId },
     _max: { zIndex: true }
   });

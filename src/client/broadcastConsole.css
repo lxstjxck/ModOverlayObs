@@ -224,6 +224,24 @@
   color: #d2d2d5;
 }
 
+.scene-repair {
+  max-height: 35vh;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid #ca8c41;
+  background: #211b19;
+  color: #f8e8d4;
+}
+
+.scene-repair > div > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
 .moderator-app .workspace {
   grid-template-columns: 340px minmax(0, 1fr) 280px;
   gap: var(--space-1);

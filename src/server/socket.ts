@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import type { User } from "@prisma/client";
+import { ZodError } from "zod";
 import type { PermissionFlag, PresenceState } from "../shared/types";
 import {
   elementPatchSchema,
@@ -33,9 +34,15 @@ import {
   getLiveState,
   getPreviewState,
   getCanvasRevision,
+  hasLegacySceneProps,
+  sceneNeedsRepair,
+  sceneStateBytes,
+  maxLegacySceneBroadcastBytes,
+  getSceneRepairItems,
   removeExpiredLiveInstances,
   removeLiveInstance,
   removePreviewElement,
+  SceneLimitError,
   showPreviewElementLive,
   updateLiveFromPreview,
   updatePreviewElement,
@@ -360,11 +367,13 @@ async function handleOverlayConnection(
     overlayReload.ready(streamerId, socket.id, payload?.attemptId);
   });
   await withCanvasLock(streamerId, async () => {
-    const state = await getPreviewState(streamerId);
     const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
-    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
     if (!socket.connected) return;
     socket.emit("canvas:state", toStreamerView(channel));
+    if (await sceneNeedsRepair(streamerId, "preview")) return;
+    const state = await getPreviewState(streamerId);
+    if (sceneStateBytes(state) > maxLegacySceneBroadcastBytes) return;
+    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
     socket.emit("overlay:state", state);
   });
   emitPresence(io, streamerId);
@@ -387,17 +396,31 @@ async function handleModeratorConnection(
     emitPresence(io, streamerId);
   });
 
-  await withCanvasLock(streamerId, async () => {
-    const initialPreview = await getPreviewState(streamerId);
+  const initialState = async () => withCanvasLock(streamerId, async () => {
     const channel = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
     socket.data.canvasRevision = getCanvasRevision(channel);
-    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
     if (!socket.connected) return;
     socket.emit("canvas:state", toStreamerView(channel));
-    socket.emit("preview:state", initialPreview);
-    socket.emit("live:state", await getLiveState(streamerId));
+    if (await sceneNeedsRepair(streamerId, "preview")) {
+      socket.emit("scene:repair", { kind: "preview", items: await getSceneRepairItems(streamerId, "preview") });
+    } else {
+      const initialPreview = await getPreviewState(streamerId);
+      if (sceneStateBytes(initialPreview) > maxLegacySceneBroadcastBytes) {
+        socket.emit("scene:repair", { kind: "preview", items: await getSceneRepairItems(streamerId, "preview") });
+      } else {
+        if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
+        socket.emit("preview:state", initialPreview);
+      }
+    }
+    if (await sceneNeedsRepair(streamerId, "live")) {
+      socket.emit("scene:repair", { kind: "live", items: await getSceneRepairItems(streamerId, "live") });
+    } else {
+      const live = await getLiveState(streamerId);
+      if (sceneStateBytes(live) > maxLegacySceneBroadcastBytes) {
+        socket.emit("scene:repair", { kind: "live", items: await getSceneRepairItems(streamerId, "live") });
+      } else socket.emit("live:state", live);
+    }
   });
-  if (!socket.connected) return;
   emitPresence(io, streamerId);
   let transformOrdinal = 0;
   let forwardedTransformOrdinal = 0;
@@ -515,6 +538,7 @@ async function handleModeratorConnection(
 
   socket.on("live:show", async (payload) => {
     await guarded(socket, user, "canPushLive", async (user) => {
+      await withCanvasLock(streamerId, async () => {
       const parsed = liveShowSchema.parse(payload);
       const live = await showPreviewElementLive(streamerId, parsed.previewId);
       await writeAudit(streamerId, user.id, "live.show", {
@@ -523,11 +547,13 @@ async function handleModeratorConnection(
       });
       scheduleLiveRemoval(io, streamerId, live.id, live.endsAt ?? null);
       await emitLiveState(io, streamerId);
+      });
     });
   });
 
   socket.on("live:update", async (payload) => {
     await guarded(socket, user, "canPushLive", async () => {
+      await withCanvasLock(streamerId, async () => {
       const parsed = liveUpdateSchema.parse(payload);
       const live = await updateLiveFromPreview(
         streamerId,
@@ -537,26 +563,31 @@ async function handleModeratorConnection(
       );
       scheduleLiveRemoval(io, streamerId, live.id, live.endsAt ?? null);
       await emitLiveState(io, streamerId);
+      });
     });
   });
 
   socket.on("live:remove", async (payload) => {
     await guarded(socket, user, "canRemoveLive", async (user) => {
+      await withCanvasLock(streamerId, async () => {
       const parsed = idSchema.parse(payload);
       await removeLiveInstance(streamerId, parsed.id);
       clearTimer(parsed.id);
       await writeAudit(streamerId, user.id, "live.removed", { liveId: parsed.id });
       await emitLiveState(io, streamerId);
+      });
     });
   });
 
   socket.on("live:clear", async () => {
     await guarded(socket, user, "canClearLive", async (user) => {
+      await withCanvasLock(streamerId, async () => {
       const current = await prisma.liveInstance.findMany({ where: { streamerId }, select: { id: true } });
       await clearLiveState(streamerId);
       for (const item of current) clearTimer(item.id);
       await writeAudit(streamerId, user.id, "live.cleared");
       await emitLiveState(io, streamerId);
+      });
     });
   });
 
@@ -580,6 +611,10 @@ async function handleModeratorConnection(
         io.to(overlayRoom(streamerId)).emit(overlayEvent, { id: parsed.id });
       });
     });
+  }
+  await initialState();
+  if (await hasLegacySceneProps(streamerId)) {
+    socket.emit("app:error", "В сцене найдены старые параметры элементов. Они сохранены в базе, но часть не отображается; проверьте сцену перед редактированием.");
   }
 }
 
@@ -611,7 +646,12 @@ async function guarded(
     await action(currentUser);
     return true;
   } catch (error) {
-    socket.emit("app:error", error instanceof Error ? error.message : "Action failed");
+    socket.emit("app:error", error instanceof SceneLimitError ? error.message :
+      error instanceof ZodError && error.issues.some((issue) => issue.code === "too_big" || issue.message === "Scene element data is too large")
+        ? "Размер данных элемента превышает допустимый лимит." :
+      error instanceof ZodError ? error.message :
+      error instanceof Error && error.name.startsWith("Prisma") ? "Не удалось сохранить сцену. Повторите действие." :
+      error instanceof Error ? error.message : "Action failed");
     return false;
   }
 }
@@ -633,7 +673,15 @@ function assertAllowed(
 }
 
 async function emitPreviewState(io: Server, streamerId: string): Promise<void> {
+  if (await sceneNeedsRepair(streamerId, "preview")) {
+    io.to(moderatorRoom(streamerId)).emit("scene:repair", { kind: "preview", items: await getSceneRepairItems(streamerId, "preview") });
+    return;
+  }
   const state = await getPreviewState(streamerId);
+  if (sceneStateBytes(state) > maxLegacySceneBroadcastBytes) {
+    io.to(moderatorRoom(streamerId)).emit("scene:repair", { kind: "preview", items: await getSceneRepairItems(streamerId, "preview") });
+    return;
+  }
   rememberPreviewIds(streamerId, state);
   io.to(moderatorRoom(streamerId)).emit("preview:state", state);
   io.to(overlayRoom(streamerId)).emit("overlay:state", state);
@@ -644,7 +692,15 @@ function rememberPreviewIds(streamerId: string, state: { id: string }[]): void {
 }
 
 async function emitLiveState(io: Server, streamerId: string): Promise<void> {
+  if (await sceneNeedsRepair(streamerId, "live")) {
+    io.to(moderatorRoom(streamerId)).emit("scene:repair", { kind: "live", items: await getSceneRepairItems(streamerId, "live") });
+    return;
+  }
   const state = await getLiveState(streamerId);
+  if (sceneStateBytes(state) > maxLegacySceneBroadcastBytes) {
+    io.to(moderatorRoom(streamerId)).emit("scene:repair", { kind: "live", items: await getSceneRepairItems(streamerId, "live") });
+    return;
+  }
   io.to(moderatorRoom(streamerId)).emit("live:state", state);
 }
 
@@ -683,9 +739,11 @@ function scheduleLiveRemoval(
   const delay = Math.max(0, new Date(endsAt).getTime() - Date.now());
   const timer = setTimeout(() => {
     void (async () => {
+      await withCanvasLock(streamerId, async () => {
       await prisma.liveInstance.deleteMany({ where: { id: liveId } });
       await emitLiveState(io, streamerId);
       liveTimers.delete(liveId);
+      });
     })();
   }, delay);
   timer.unref();
@@ -695,6 +753,7 @@ function scheduleLiveRemoval(
 async function cleanupExpiredAndBroadcast(io: Server): Promise<void> {
   const streamers = await prisma.streamer.findMany({ select: { id: true } });
   for (const streamer of streamers) {
+    await withCanvasLock(streamer.id, async () => {
     const removed = await removeExpiredLiveInstances(streamer.id);
     if (removed.length > 0) {
       for (const id of removed) {
@@ -702,6 +761,7 @@ async function cleanupExpiredAndBroadcast(io: Server): Promise<void> {
       }
       await emitLiveState(io, streamer.id);
     }
+    });
   }
 }
 

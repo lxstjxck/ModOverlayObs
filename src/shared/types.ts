@@ -138,6 +138,11 @@ export interface OverlayElement {
   props: Record<string, unknown>;
 }
 
+export interface SceneRepairNotice {
+  kind: "preview" | "live";
+  items: Array<{ id: string; name: string }>;
+}
+
 export interface ElementTransform {
   id: string;
   x?: number;

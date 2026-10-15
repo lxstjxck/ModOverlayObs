@@ -1,5 +1,32 @@
 import { z } from "zod";
 import { getEbloPostId } from "./mediaUrl";
+import { sceneLimits } from "./sceneLimits";
+
+const color = z.string().max(64).regex(/^(?:transparent|#[0-9a-fA-F]{3,8}|rgba?\(\s*[\d.%,\s]+\))$/);
+const fontFamily = z.string().max(160).regex(/^[\p{L}\p{N} ,"'-]+$/u);
+export const elementPropsObjectSchema = z.object({
+  fontFamily: fontFamily.optional(),
+  fontSize: z.number().finite().min(1).max(1000).optional(),
+  fontWeight: z.number().finite().min(100).max(1000).optional(),
+  color: color.optional(),
+  background: color.optional(),
+  stroke: color.optional(),
+  strokeWidth: z.number().finite().min(0).max(100).optional(),
+  align: z.enum(["left", "center", "right"]).optional(),
+  shadow: z.boolean().optional(),
+  cropLeft: z.number().finite().min(0).max(10000).optional(),
+  cropRight: z.number().finite().min(0).max(10000).optional(),
+  cropTop: z.number().finite().min(0).max(10000).optional(),
+  cropBottom: z.number().finite().min(0).max(10000).optional(),
+  title: z.string().max(180).optional(),
+  visualizer: z.boolean().optional(),
+  playbackCommand: z.enum(["seek", "play", "pause", "stop", "restart"]).optional(),
+  playbackCommandId: z.string().max(80).optional(),
+  seekSeconds: z.number().finite().min(0).max(86400).optional()
+}).strict();
+export const elementPropsSchema = elementPropsObjectSchema.refine((value) => new TextEncoder().encode(JSON.stringify(value)).length <= sceneLimits.propsBytes, {
+  message: "Scene element data is too large"
+});
 
 export const animationSchema = z
   .enum(["none", "fade", "scale", "slide-left", "slide-right", "slide-up", "slide-down"])
@@ -45,7 +72,7 @@ export const elementPatchSchema = z
       .min(0)
       .max(24 * 60 * 60)
       .optional(),
-    props: z.record(z.string(), z.unknown()).optional()
+    props: elementPropsSchema.optional()
   })
   .strict();
 

@@ -33,6 +33,7 @@ import { listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
 import { twitchAuthRouter } from "./twitchAuth";
 import { canAccessChannel } from "./channelAccess";
 import { CanvasConflictError, CanvasGeometryError, saveCanvasSettings } from "./canvasSettings";
+import { SceneLimitError } from "./state";
 import { broadcastCanvasState } from "./socket";
 import {
   deleteStoredUpload,
@@ -508,7 +509,7 @@ export function createAppRouter(): express.Router {
       await broadcastCanvasState(channelId);
       response.json({ streamer: toStreamerView(updated) });
     } catch (error) {
-      if (error instanceof CanvasConflictError || error instanceof CanvasGeometryError) {
+      if (error instanceof CanvasConflictError || error instanceof CanvasGeometryError || error instanceof SceneLimitError) {
         response.status(error instanceof CanvasConflictError ? 409 : 422).json({ error: error.message });
         return;
       }

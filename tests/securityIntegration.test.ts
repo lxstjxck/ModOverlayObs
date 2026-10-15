@@ -74,6 +74,11 @@ import { canAccessChannel, encryptOAuthToken, getModeratedChannels, setModerator
 import { startTts, stopTts } from "../src/server/tts";
 import { cleanupStaleUploadFiles } from "../src/server/uploads";
 import type { OverlayReloadStatus } from "../src/shared/types";
+import { elementPatchSchema } from "../src/shared/validation";
+import { sceneLimits } from "../src/shared/sceneLimits";
+import { createPreviewElement, duplicatePreviewElement, showPreviewElementLive, updatePreviewElement, SceneLimitError, sceneNeedsRepair, getSceneRepairItems, removeExpiredLiveInstances, hasLegacySceneProps } from "../src/server/state";
+import { getPreviewState } from "../src/server/state";
+import { withCanvasLock } from "../src/server/canvasSettings";
 
 const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=",
@@ -190,6 +195,16 @@ it("uses validated intrinsic dimensions for a new preview without changing live 
     x: -696
   });
   expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements - 1 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Existing"
+  })) });
+  let unexpectedBroadcasts = 0;
+  socket.on("preview:state", () => { unexpectedBroadcasts += 1; });
+  const rejected = event<string>(socket, "app:error");
+  socket.emit("preview:add", { type: "TEXT", text: "over limit" });
+  expect(await rejected).toContain("Достигнут лимит элементов сцены");
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(sceneLimits.previewElements);
+  expect(unexpectedBroadcasts).toBe(0);
 });
 
 it("adds a large video at the fitted preview size without changing its source metadata", async () => {
@@ -344,6 +359,145 @@ afterAll(async () => {
   await prisma.$disconnect();
   // root is the unique directory created by mkdtemp above.
   await fs.rm(fixture.root, { recursive: true, force: true });
+});
+
+it("validates supported props and rejects oversized, nested and dangerous values", () => {
+  expect(elementPatchSchema.safeParse({ props: {
+    fontFamily: "Inter, Arial, sans-serif", fontSize: 46, fontWeight: 800,
+    color: "#ffffff", background: "rgba(0,0,0,0)", stroke: "#000000",
+    strokeWidth: 2, align: "left", shadow: true, cropLeft: 20,
+    cropRight: 20, cropTop: 10, cropBottom: 10, title: "Audio",
+    visualizer: true, playbackCommand: "seek", seekSeconds: 12,
+    playbackCommandId: "test-command"
+  } }).success).toBe(true);
+  for (const props of [
+    { title: "x".repeat(181) }, { extra: 1 },
+    JSON.parse('{"__proto__":{"polluted":true}}'),
+    { color: "url(https://example.com/x)" }, { fontFamily: "url(evil)" },
+    { cropLeft: Infinity }, { cropTop: -1 }, { title: { nested: true } }
+  ]) expect(elementPatchSchema.safeParse({ props }).success).toBe(false);
+});
+
+it("reads legacy unknown props safely without deleting them during an edit", async () => {
+  const row = await prisma.previewElement.create({ data: {
+    streamerId, type: "TEXT", name: "Legacy", propsJson: JSON.stringify({ legacyMode: { nested: true }, color: "#ffffff" })
+  } });
+  expect((await getPreviewState(streamerId))[0].props).toEqual({ color: "#ffffff" });
+  expect(await hasLegacySceneProps(streamerId)).toBe(true);
+  await updatePreviewElement(streamerId, row.id, { props: { color: "#000000" } });
+  expect(JSON.parse((await prisma.previewElement.findUniqueOrThrow({ where: { id: row.id } })).propsJson)).toEqual({
+    legacyMode: { nested: true }, color: "#000000"
+  });
+});
+
+it("enforces the preview count for creation and duplication, then frees a place on deletion", async () => {
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements - 1 }, (_, index) => ({
+    streamerId, type: "TEXT" as const, name: `Text ${index}`
+  })) });
+  const created = await createPreviewElement(streamerId, { type: "TEXT" });
+  await expect(createPreviewElement(streamerId, { type: "TEXT" })).rejects.toBeInstanceOf(SceneLimitError);
+  await expect(duplicatePreviewElement(streamerId, created.id)).rejects.toBeInstanceOf(SceneLimitError);
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(sceneLimits.previewElements);
+  await prisma.previewElement.delete({ where: { id: created.id } });
+  await expect(duplicatePreviewElement(streamerId,
+    (await prisma.previewElement.findFirstOrThrow({ where: { streamerId } })).id)).resolves.toHaveProperty("id");
+  const other = await prisma.streamer.create({ data: { displayName: "Other", overlayToken: "other-scene-token" } });
+  await expect(createPreviewElement(other.id, { type: "TEXT" })).resolves.toHaveProperty("id");
+});
+
+it("limits active live instances separately and rolls back oversized updates", async () => {
+  const source = await createPreviewElement(streamerId, { type: "TEXT" });
+  await prisma.liveInstance.createMany({ data: Array.from({ length: sceneLimits.liveInstances - 1 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Live"
+  })) });
+  await showPreviewElementLive(streamerId, source.id);
+  await expect(showPreviewElementLive(streamerId, source.id)).rejects.toBeInstanceOf(SceneLimitError);
+  expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(sceneLimits.liveInstances);
+  const old = await prisma.previewElement.findUniqueOrThrow({ where: { id: source.id } });
+  await expect(updatePreviewElement(streamerId, source.id, { name: "x".repeat(9000) })).rejects.toBeInstanceOf(SceneLimitError);
+  expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: source.id } })).name).toBe(old.name);
+});
+
+it("serializes concurrent moderator additions at the preview limit", async () => {
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements - 1 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Existing"
+  })) });
+  const results = await Promise.allSettled([
+    withCanvasLock(streamerId, () => createPreviewElement(streamerId, { type: "TEXT", text: "owner" })),
+    withCanvasLock(streamerId, () => createPreviewElement(streamerId, { type: "TEXT", text: "moderator" }))
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(sceneLimits.previewElements);
+});
+
+it("does not let simultaneous duplicates bypass the preview limit", async () => {
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements - 2 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Existing"
+  })) });
+  const source = await createPreviewElement(streamerId, { type: "TEXT" });
+  const results = await Promise.allSettled([
+    withCanvasLock(streamerId, () => duplicatePreviewElement(streamerId, source.id)),
+    withCanvasLock(streamerId, () => duplicatePreviewElement(streamerId, source.id))
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(sceneLimits.previewElements);
+});
+
+it("does not let simultaneous live shows bypass the separate live limit", async () => {
+  const source = await createPreviewElement(streamerId, { type: "TEXT" });
+  await prisma.liveInstance.createMany({ data: Array.from({ length: sceneLimits.liveInstances - 1 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Existing"
+  })) });
+  const results = await Promise.allSettled([
+    withCanvasLock(streamerId, () => showPreviewElementLive(streamerId, source.id)),
+    withCanvasLock(streamerId, () => showPreviewElementLive(streamerId, source.id))
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(sceneLimits.liveInstances);
+});
+
+it("keeps an over-limit existing scene readable and permits reduction", async () => {
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements + 1 }, () => ({
+    streamerId, type: "TEXT" as const, name: "Existing"
+  })) });
+  const state = await getPreviewState(streamerId);
+  expect(state).toHaveLength(sceneLimits.previewElements + 1);
+  await expect(createPreviewElement(streamerId, { type: "TEXT" })).rejects.toBeInstanceOf(SceneLimitError);
+  await updatePreviewElement(streamerId, state[0].id, { text: "shorter" });
+  await prisma.previewElement.delete({ where: { id: state[0].id } });
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(sceneLimits.previewElements);
+});
+
+it("rejects a growth beyond the total serialized preview budget without a partial write", async () => {
+  await prisma.previewElement.createMany({ data: Array.from({ length: sceneLimits.previewElements }, (_, index) => ({
+    streamerId, type: "TEXT" as const, name: "Large", text: index === 0 ? "" : "x".repeat(4000)
+  })) });
+  const state = await getPreviewState(streamerId);
+  expect(Buffer.byteLength(JSON.stringify(state), "utf8")).toBeGreaterThan(sceneLimits.previewBytes);
+  await expect(updatePreviewElement(streamerId, state[0].id, { text: "larger" })).rejects.toBeInstanceOf(SceneLimitError);
+  expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: state[0].id } })).text).toBe("");
+});
+
+it("offers a bounded repair list for a legacy scene too large to broadcast", async () => {
+  const row = await prisma.previewElement.create({ data: {
+    streamerId, type: "TEXT", name: "Oversized", text: "x".repeat(4 * 1024 * 1024)
+  } });
+  expect(await sceneNeedsRepair(streamerId, "preview")).toBe(true);
+  expect(await getSceneRepairItems(streamerId, "preview")).toEqual([{ id: row.id, name: "Oversized" }]);
+  await prisma.previewElement.delete({ where: { id: row.id } });
+  expect(await sceneNeedsRepair(streamerId, "preview")).toBe(false);
+  expect(await prisma.previewElement.count({ where: { streamerId } })).toBe(0);
+});
+
+it("removes expiring live instances and frees the live budget", async () => {
+  const source = await createPreviewElement(streamerId, { type: "TEXT" });
+  await updatePreviewElement(streamerId, source.id, { durationMs: 100 });
+  const shown = await showPreviewElementLive(streamerId, source.id);
+  expect(shown.endsAt).not.toBeNull();
+  await prisma.liveInstance.update({ where: { id: shown.id }, data: { endsAt: new Date(Date.now() - 1) } });
+  expect(await removeExpiredLiveInstances(streamerId)).toEqual([shown.id]);
+  expect(await prisma.liveInstance.count({ where: { streamerId } })).toBe(0);
 });
 
 it("reloads only the owner's channel and waits for each OBS reconnect and state sync", async () => {

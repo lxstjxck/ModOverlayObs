@@ -13,6 +13,7 @@ import type {
   OverlayElement,
   PermissionMap,
   PresenceState,
+  SceneRepairNotice,
   StreamerView,
   UserView
 } from "../../shared/types";
@@ -139,6 +140,9 @@ export function ModeratorApp() {
   const [assetTab, setAssetTab] = useState<"media" | "emotes">("media");
   const [emotesOpened, setEmotesOpened] = useState(false);
   const [preview, setPreview] = useState<OverlayElement[]>([]);
+  const [sceneRepair, setSceneRepair] = useState<Record<"preview" | "live", Array<{ id: string; name: string }>>>(
+    { preview: [], live: [] }
+  );
   const [presence, setPresence] = useState<PresenceState>({
     overlayConnected: false,
     overlayCount: 0,
@@ -248,6 +252,7 @@ export function ModeratorApp() {
         : "/overlay";
     });
     socket.on("preview:state", (state: OverlayElement[]) => {
+      setSceneRepair((current) => ({ ...current, preview: [] }));
       canvasRefreshPending.current = false;
       if (
         previewRef.current.length > 0 &&
@@ -313,6 +318,15 @@ export function ModeratorApp() {
     });
     socket.on("presence:update", (state: PresenceState) => setPresence(state));
     socket.on("app:error", (message: string) => setError(message));
+    socket.on("scene:repair", (notice: SceneRepairNotice) => {
+      setSceneRepair((current) => ({ ...current, [notice.kind]: notice.items }));
+      if (notice.kind === "preview") {
+        canvasRefreshPending.current = false;
+        setPreview([]);
+      }
+      setError("Сцена слишком велика для безопасной передачи. Владелец может удалить лишние элементы ниже.");
+    });
+    socket.on("live:state", () => setSceneRepair((current) => ({ ...current, live: [] })));
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -799,6 +813,28 @@ export function ModeratorApp() {
             x
           </button>
         </div>
+      )}
+
+      {(sceneRepair.preview.length > 0 || sceneRepair.live.length > 0) && (
+        <section className="scene-repair" aria-label="Исправление размера сцены">
+          <p>Сцена превышает безопасный размер. Удалите ненужные элементы, чтобы восстановить синхронизацию с OBS.</p>
+          {(["preview", "live"] as const).map((kind) => sceneRepair[kind].length > 0 && (
+            <div key={kind}>
+              <strong>{kind === "preview" ? "Элементы редактора" : "Активные элементы LIVE"}</strong>
+              {sceneRepair[kind].map((item) => (
+                <div key={item.id}>
+                  <span>{item.name}</span>
+                  {user?.role === "OWNER" && (
+                    <button type="button" onClick={() => emit(kind === "preview" ? "preview:remove" : "live:remove", { id: item.id })}>
+                      Удалить
+                    </button>
+                  )}
+                </div>
+              ))}
+              {sceneRepair[kind].length === 100 && <p>Показаны первые 100 элементов. После удаления список обновится.</p>}
+            </div>
+          ))}
+        </section>
       )}
 
       <div className={`workspace ${propertiesVisible ? "" : "workspace-no-properties"}`}>

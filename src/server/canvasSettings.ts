@@ -2,11 +2,15 @@ import type { Streamer } from "@prisma/client";
 import crypto from "node:crypto";
 import type { CanvasSettingsInput } from "../shared/types";
 import { prisma } from "./db";
-import { getCanvasRevision } from "./state";
+import { assertSceneBudgetChange, getCanvasRevision, sceneSnapshot } from "./state";
 
 const pending = new Map<string, Promise<void>>();
+const queued = new Map<string, number>();
 
 export async function withCanvasLock<T>(channelId: string, action: () => Promise<T>): Promise<T> {
+  const waiting = queued.get(channelId) ?? 0;
+  if (waiting >= 64) throw new Error("Сцена занята. Повторите действие чуть позже.");
+  queued.set(channelId, waiting + 1);
   const previous = pending.get(channelId) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => { release = resolve; });
@@ -14,6 +18,9 @@ export async function withCanvasLock<T>(channelId: string, action: () => Promise
   await previous;
   try { return await action(); }
   finally {
+    const remaining = (queued.get(channelId) ?? 1) - 1;
+    if (remaining === 0) queued.delete(channelId);
+    else queued.set(channelId, remaining);
     release();
     if (pending.get(channelId) === current) pending.delete(channelId);
   }
@@ -64,6 +71,8 @@ export async function saveCanvasSettings(
     const scaleX = input.width / current.canvasWidth;
     const scaleY = input.height / current.canvasHeight;
     if (input.mode === "scale") {
+      const beforePreview = await sceneSnapshot(tx, channelId, "preview");
+      const beforeLive = await sceneSnapshot(tx, channelId, "live");
       const previews = await tx.previewElement.findMany({ where: { streamerId: channelId } });
       const live = await tx.liveInstance.findMany({ where: { streamerId: channelId } });
       for (const row of previews) {
@@ -72,6 +81,8 @@ export async function saveCanvasSettings(
       for (const row of live) {
         await tx.liveInstance.update({ where: { id: row.id }, data: scaledBounds(row, scaleX, scaleY) });
       }
+      assertSceneBudgetChange(beforePreview, await sceneSnapshot(tx, channelId, "preview"), "preview");
+      assertSceneBudgetChange(beforeLive, await sceneSnapshot(tx, channelId, "live"), "live");
     }
     let settings: Record<string, unknown>;
     try { settings = JSON.parse(current.settingsJson) as Record<string, unknown>; }
