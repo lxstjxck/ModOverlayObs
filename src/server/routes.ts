@@ -425,7 +425,7 @@ export function createAppRouter(): express.Router {
     }
   );
 
-  router.patch("/media/:id", async (request, response) => {
+  router.patch("/media/:id", requirePermission("canDeleteMedia"), async (request, response) => {
     const mediaId = readRouteParam(request.params.id);
     if (!mediaId) {
       response.status(400).json({ error: "Invalid media id" });

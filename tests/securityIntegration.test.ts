@@ -361,6 +361,84 @@ afterAll(async () => {
   await fs.rm(fixture.root, { recursive: true, force: true });
 });
 
+describe("media rename permissions", () => {
+  function rename(id: string, token: string, channelId: string, originalName: string, csrf = true) {
+    const requestHeaders: Record<string, string> = {
+      ...headers(token), "x-channel-id": channelId, "Content-Type": "application/json"
+    };
+    if (!csrf) delete requestHeaders["x-csrf-token"];
+    return fetch(`${baseUrl}/api/media/${id}`, {
+      method: "PATCH", headers: requestHeaders, body: JSON.stringify({ originalName })
+    });
+  }
+
+  it("lets the Twitch owner rename without changing the file or OBS media access", async () => {
+    const uploaded = await upload();
+    expect(uploaded.status).toBe(201);
+    const { media } = (await uploaded.json()) as { media: { id: string; url: string } };
+    const stored = await prisma.media.findUniqueOrThrow({ where: { id: media.id } });
+    const filePath = path.join(config.uploadDir, stored.filename);
+    const before = await fs.readFile(filePath);
+
+    const renamed = await rename(media.id, "owner-session", streamerId, "  New name.png  ");
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as { media: { originalName: string } }).media.originalName).toBe("New name.png");
+    expect((await prisma.media.findUniqueOrThrow({ where: { id: media.id } })).originalName).toBe("New name.png");
+    expect(await fs.readFile(filePath)).toEqual(before);
+
+    const obsUrl = `${baseUrl}${media.url}?overlayToken=overlay-old`;
+    expect((await fetch(obsUrl)).status).toBe(200);
+    expect((await fetch(obsUrl, { method: "HEAD" })).status).toBe(200);
+    const ranged = await fetch(obsUrl, { headers: { Range: "bytes=0-7" } });
+    expect(ranged.status).toBe(206);
+    expect(Buffer.from(await ranged.arrayBuffer())).toEqual(before.subarray(0, 8));
+
+    expect((await rename(media.id, "owner-session", streamerId, " ")).status).toBe(400);
+    expect((await rename(media.id, "owner-session", streamerId, "a".repeat(181))).status).toBe(400);
+    expect((await prisma.media.findUniqueOrThrow({ where: { id: media.id } })).originalName).toBe("New name.png");
+
+    expect((await fetch(`${baseUrl}/api/media/${media.id}`, { method: "DELETE", headers: headers() })).status).toBe(200);
+    expect(await prisma.media.findUnique({ where: { id: media.id } })).toBeNull();
+    await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects moderators without library rights, inaccessible users, legacy owners and missing CSRF", async () => {
+    const uploaded = await upload();
+    const { media } = (await uploaded.json()) as { media: { id: string } };
+    const before = await prisma.media.findUniqueOrThrow({ where: { id: media.id } });
+    const auditCount = await prisma.auditLog.count({ where: { streamerId } });
+
+    expect((await rename(media.id, "mod-session", streamerId, "Forbidden.png")).status).toBe(403);
+    expect((await fetch(`${baseUrl}/api/media/${media.id}`, {
+      method: "DELETE", headers: headers("mod-session")
+    })).status).toBe(403);
+    await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
+    expect((await rename(media.id, "mod-session", streamerId, "Banned.png")).status).toBe(403);
+
+    const legacy = await prisma.user.create({ data: {
+      username: "rename-legacy", displayName: "Legacy owner", passwordHash: "unused", role: "OWNER"
+    } });
+    await addSession(legacy.id, "rename-legacy-session", new Date(Date.now() + 60_000), "LEGACY");
+    expect((await rename(media.id, "rename-legacy-session", streamerId, "Legacy.png")).status).toBe(401);
+    expect((await rename(media.id, "owner-session", streamerId, "No CSRF.png", false)).status).toBe(403);
+
+    expect(await prisma.media.findUniqueOrThrow({ where: { id: media.id } })).toEqual(before);
+    expect(await prisma.auditLog.count({ where: { streamerId } })).toBe(auditCount);
+  });
+
+  it("keeps another channel owner from renaming media across channels", async () => {
+    const uploaded = await upload();
+    const { media } = (await uploaded.json()) as { media: { id: string } };
+    const second = await prisma.streamer.create({ data: {
+      displayName: "Other channel", overlayToken: "other-overlay", ownerUserId: moderatorId,
+      twitchBroadcasterId: "90002"
+    } });
+    expect((await rename(media.id, "owner-session", second.id, "No access.png")).status).toBe(403);
+    expect((await rename(media.id, "mod-session", second.id, "Other owner.png")).ok).toBe(false);
+    expect((await prisma.media.findUniqueOrThrow({ where: { id: media.id } })).originalName).toBe("test.png");
+  });
+});
+
 it("validates supported props and rejects oversized, nested and dangerous values", () => {
   expect(elementPatchSchema.safeParse({ props: {
     fontFamily: "Inter, Arial, sans-serif", fontSize: 46, fontWeight: 800,
