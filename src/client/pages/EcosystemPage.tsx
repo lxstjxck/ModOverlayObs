@@ -58,7 +58,8 @@ function EcosystemContent() {
         <div className="ecosystem-hero-glow" aria-hidden="true" />
         <div className="ecosystem-hero-content">
           <h1 id="ecosystem-title">
-            Всё для твоего стрима
+            <span>Всё для твоего</span>
+            <span>стрима</span>
           </h1>
           <p className="ecosystem-hero-lead">
             Инструменты для стримеров и модераторов в одной экосистеме.

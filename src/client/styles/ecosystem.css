@@ -36,13 +36,25 @@
 }
 
 .ecosystem-hero h1 {
-  max-width: 900px;
+  width: max-content;
+  max-width: none;
   margin: 0;
   font-size: var(--hero-title-size);
   font-weight: 300;
   letter-spacing: normal;
   line-height: 1.07;
 }
+
+.ecosystem-hero h1 span {
+  translate: -0.045em 0;
+  display: block;
+  white-space: nowrap;
+}
+
+.ecosystem-hero h1 span:last-child {
+  translate: -0.09em 0;
+}
+
 
 .ecosystem-hero-lead {
   max-width: 590px;
@@ -367,5 +379,16 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 700px) {
+  .ecosystem-hero h1 {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .ecosystem-hero h1 span {
+    white-space: normal;
   }
 }
