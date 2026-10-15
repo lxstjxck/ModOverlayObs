@@ -29,7 +29,7 @@ import { prisma } from "./db";
 import { ttsRouter } from "./tts";
 import { accessRevocation } from "./accessRevocation";
 import { clientIp, createRateLimitMiddleware } from "./security";
-import { getDefaultStreamer, listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
+import { listMedia, toMediaItem, toStreamerView, writeAudit } from "./state";
 import { twitchAuthRouter } from "./twitchAuth";
 import { canAccessChannel } from "./channelAccess";
 import { CanvasConflictError, CanvasGeometryError, saveCanvasSettings } from "./canvasSettings";
@@ -94,6 +94,11 @@ export function createAppRouter(): express.Router {
       response.status(400).json({ error: "Invalid login payload" });
       return;
     }
+    const streamer = await prisma.streamer.findFirst({ orderBy: { createdAt: "asc" } });
+    if (!streamer || streamer.ownerUserId) {
+      response.status(403).json({ error: "Password sign-in is available only for an unbound channel migration" });
+      return;
+    }
 
     const user = await prisma.user.findUnique({
       where: { username: parsed.data.username }
@@ -101,23 +106,20 @@ export function createAppRouter(): express.Router {
     if (
       !user ||
       user.twitchUserId ||
+      user.role !== "OWNER" ||
       !(await bcrypt.compare(parsed.data.password, user.passwordHash))
     ) {
-      if (await prisma.user.count({ where: { twitchUserId: null } })) {
-        const streamer = await getDefaultStreamer();
-        await writeAudit(streamer.id, user?.id ?? null, "auth.login_failed", {
-          username: parsed.data.username,
-          ip: clientIp(request)
-        });
-      }
+      await writeAudit(streamer.id, user?.id ?? null, "auth.login_failed", {
+        username: parsed.data.username,
+        ip: clientIp(request)
+      });
       response.status(401).json({ error: "Invalid username or password" });
       return;
     }
 
-    const streamer = await getDefaultStreamer();
     const csrfToken = await createSession(user.id, response);
     await writeAudit(streamer.id, user.id, "auth.login_success", { ip: clientIp(request) });
-    response.json({ user: toUserView(user), streamer: toStreamerView(streamer), csrfToken });
+    response.json({ migrationOnly: true, csrfToken });
   });
 
   router.post("/auth/logout", async (request, response) => {
@@ -562,9 +564,8 @@ function isChannelOwner(
   channel: Streamer
 ): boolean {
   if (!session) return false;
-  return session.authMethod === "LEGACY"
-    ? session.user.role === "OWNER"
-    : session.twitchMode === "unified" && channel.ownerUserId === session.user.id && channel.twitchBroadcasterId === session.user.twitchUserId;
+  return session.authMethod === "TWITCH" && session.twitchMode === "unified" &&
+    channel.ownerUserId === session.user.id && channel.twitchBroadcasterId === session.user.twitchUserId;
 }
 
 class UploadQuotaError extends Error {

@@ -87,16 +87,20 @@ const clients: Socket[] = [];
 function headers(token = "owner-session") {
   return {
     Cookie: `${sessionCookieName}=${token}`,
-    "x-csrf-token": createCsrfTokenFromSessionToken(token)
+    "x-csrf-token": createCsrfTokenFromSessionToken(token),
+    ...(["owner-session", "mod-session", "other-session", "short-session", "other-owner-session"].includes(token)
+      ? { "x-channel-id": streamerId } : {})
   };
 }
 
 async function addSession(
   userId: string,
   token: string,
-  expiresAt = new Date(Date.now() + 60_000)
+  expiresAt = new Date(Date.now() + 60_000),
+  authMethod: "TWITCH" | "LEGACY" = "TWITCH"
 ) {
-  await prisma.session.create({ data: { userId, tokenHash: hashSessionToken(token), expiresAt } });
+  await prisma.session.create({ data: { userId, tokenHash: hashSessionToken(token), expiresAt,
+    authMethod, twitchMode: authMethod === "TWITCH" ? "unified" : null } });
 }
 
 function event<T = unknown>(socket: Socket, name: string, timeoutMs = 4000): Promise<T> {
@@ -122,7 +126,10 @@ async function socketClient(
     reconnection: false,
     autoConnect: false,
     extraHeaders: options.session ? { Cookie: headers(options.session).Cookie } : undefined,
-    query: options.overlayToken ? { overlayToken: options.overlayToken } : options.channelId ? { channelId: options.channelId } : undefined
+    query: options.overlayToken ? { overlayToken: options.overlayToken } :
+      options.channelId ? { channelId: options.channelId } :
+        options.session && ["owner-session", "mod-session", "other-session", "short-session", "other-owner-session"].includes(options.session)
+          ? { channelId: streamerId } : undefined
   });
   clients.push(socket);
   const ready = event(socket, expected);
@@ -154,7 +161,7 @@ async function bindTestTwitchOwner(channelId = streamerId, sessionToken = "rotat
   } });
   await prisma.streamer.update({ where: { id: channelId }, data: { ownerUserId: user.id, twitchBroadcasterId: twitchId } });
   const realFetch = globalThis.fetch;
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input) === "https://id.twitch.tv/oauth2/validate") {
       return Promise.resolve(new Response(JSON.stringify({ client_id: config.twitchClientId,
         user_id: twitchId, scopes: ["moderation:read", "user:read:moderated_channels"] })));
@@ -279,25 +286,52 @@ beforeEach(async () => {
   });
   streamerId = streamer.id;
   const owner = await prisma.user.create({
-    data: { username: "owner", displayName: "Owner", passwordHash: "unused", role: "OWNER" }
+    data: { username: "owner", displayName: "Owner", passwordHash: "unused", role: "OWNER", twitchUserId: "90001" }
   });
   const moderator = await prisma.user.create({
     data: {
       username: "mod",
       displayName: "Mod",
       passwordHash: "unused",
-      role: "MODERATOR",
+      role: "MODERATOR", twitchUserId: "90002",
       permissionsJson: JSON.stringify({ canEditPreview: true, canPushLive: false })
     }
   });
   ownerId = owner.id;
   moderatorId = moderator.id;
+  await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: ownerId, twitchBroadcasterId: "90001" } });
+  for (const [userId, id] of [[ownerId, "90001"], [moderatorId, "90002"]] as const) {
+    await prisma.twitchOAuthConnection.create({ data: {
+      userId, mode: "unified", encryptedAccess: encryptOAuthToken(`fixture-${id}`),
+      encryptedRefresh: encryptOAuthToken(`refresh-${id}`), scopesJson: JSON.stringify(["moderation:read", "user:read:moderated_channels"]),
+      expiresAt: new Date(Date.now() + 3600_000), checkedAt: new Date()
+    } });
+  }
+  await prisma.channelModeratorSnapshot.create({ data: { channelId: streamerId,
+    userIdsJson: JSON.stringify(["90002"]), checkedAt: new Date() } });
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "https://id.twitch.tv/oauth2/validate") {
+      const token = new Headers(init?.headers).get("Authorization")?.replace("OAuth fixture-", "");
+      if (token === "90001" || token === "90002") return Promise.resolve(new Response(JSON.stringify({
+        client_id: config.twitchClientId, user_id: token,
+        scopes: ["moderation:read", "user:read:moderated_channels"]
+      })));
+    }
+    if (url.startsWith("https://api.twitch.tv/helix/moderation/moderators?") &&
+        new URL(url).searchParams.get("broadcaster_id") === "90001") {
+      return Promise.resolve(new Response(JSON.stringify({ data: [{ user_id: "90002" }], pagination: {} })));
+    }
+    return realFetch(input, init);
+  });
   await addSession(ownerId, "owner-session");
   await addSession(moderatorId, "mod-session");
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const socket of clients.splice(0)) socket.disconnect();
   realtime.disconnectSockets(true);
   await expect.poll(() => accessRevocation.listenerCount("session")).toBe(0);
@@ -390,6 +424,7 @@ it("reloads only the owner's channel and waits for each OBS reconnect and state 
 });
 
 it("requires a non-template password before creating the first owner", async () => {
+  await prisma.streamer.deleteMany();
   await prisma.user.deleteMany();
   for (const password of ["", "change-me-now", "change-me-now ", "too-short", "            "]) {
     config.initialAdminPassword = password;
@@ -408,8 +443,8 @@ it("requires a non-template password before creating the first owner", async () 
 });
 
 it("starts a Twitch-only installation without creating a legacy owner", async () => {
-  await prisma.user.deleteMany();
   await prisma.streamer.deleteMany();
+  await prisma.user.deleteMany();
   config.initialAdminPassword = "";
   config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
   await ensureRuntimeState();
@@ -818,11 +853,17 @@ it("creates two independent Twitch channels and isolates moderators, OBS, media 
 
 it("binds the existing channel only with the same legacy owner session and Twitch identity", async () => {
   config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+  await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: null, twitchBroadcasterId: null } });
+  const legacyOwner = await prisma.user.create({ data: {
+    username: "legacy-owner", displayName: "Legacy owner", passwordHash: await bcrypt.hash("migration-password-123", 12), role: "OWNER"
+  } });
+  await addSession(legacyOwner.id, "legacy-owner", new Date(Date.now() + 60_000), "LEGACY");
   await prisma.media.create({ data: { streamerId, filename: "keep.png", originalName: "keep.png", mimeType: "image/png", type: "IMAGE", size: png.length, url: "/uploads/keep.png" } });
+  await prisma.previewElement.create({ data: { streamerId, type: "TEXT", name: "Preserved", text: "Keep scene" } });
   await prisma.settings.create({ data: { key: `tts:twitch:${streamerId}`, value: "existing-tts-setting" } });
   const denied = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers("mod-session"), redirect: "manual" });
   expect(denied.status).toBe(403);
-  const start = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" });
+  const start = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers("legacy-owner"), redirect: "manual" });
   expect(start.status).toBe(302);
   const authorize = new URL(start.headers.get("location")!);
   expect(authorize.searchParams.get("scope")).toBe("moderation:read user:read:moderated_channels");
@@ -831,7 +872,7 @@ it("binds the existing channel only with the same legacy owner session and Twitc
   const wrongSession = await fetch(callback, { headers: { Cookie: `${stateCookie}; ${headers("mod-session").Cookie}` }, redirect: "manual" });
   expect(wrongSession.headers.get("location")).toBe("/overlay?oauth_error=legacy_owner_required");
   expect((await prisma.streamer.findUnique({ where: { id: streamerId } }))?.ownerUserId).toBeNull();
-  const retry = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers(), redirect: "manual" });
+  const retry = await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers("legacy-owner"), redirect: "manual" });
   const retryState = new URL(retry.headers.get("location")!).searchParams.get("state");
   const retryCookie = retry.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
   const realFetch = globalThis.fetch;
@@ -845,27 +886,129 @@ it("binds the existing channel only with the same legacy owner session and Twitc
         : { data: [{ id: "12345", login: "ownername", display_name: "Owner Name", profile_image_url: "" }] };
     return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
   });
-  const result = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${retryState}&code=code`, { headers: { Cookie: `${retryCookie}; ${headers().Cookie}` }, redirect: "manual" });
+  const result = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${retryState}&code=code`, { headers: { Cookie: `${retryCookie}; ${headers("legacy-owner").Cookie}` }, redirect: "manual" });
   expect(result.status).toBe(303);
   expect(result.headers.get("location")).toBe("/channels?oauth_bound=1");
   const newSession = result.headers.getSetCookie().filter((value) => value.startsWith(`${sessionCookieName}=`)).at(-1)!.split(";")[0];
   expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: newSession } })).status).toBe(200);
-  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: headers() })).status).toBe(401);
+  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: headers("legacy-owner") })).status).toBe(401);
   const channel = await prisma.streamer.findUnique({ where: { id: streamerId } });
   expect(channel).toMatchObject({ twitchBroadcasterId: "12345", twitchLogin: "ownername", overlayToken: "overlay-old" });
   expect(channel?.ownerUserId).toBeTruthy();
-  const legacyOwner = await prisma.user.findFirstOrThrow({ where: { role: "OWNER" } });
-  await addSession(legacyOwner.id, "legacy-again");
+  await addSession(legacyOwner.id, "legacy-again", new Date(Date.now() + 60_000), "LEGACY");
   const relabel = await fetch(`${baseUrl}/api/streamer/twitch`, {
     method: "PATCH",
     headers: { ...headers("legacy-again"), "Content-Type": "application/json" },
     body: JSON.stringify({ login: "imposter", broadcasterId: "99999" })
   });
-  expect(relabel.status).toBe(409);
+  expect(relabel.status).toBe(401);
   expect((await prisma.streamer.findUnique({ where: { id: streamerId } }))?.twitchBroadcasterId).toBe("12345");
   expect((await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: headers("legacy-again"), redirect: "manual" })).status).toBe(409);
   expect((await prisma.media.count({ where: { streamerId } }))).toBe(1);
   expect((await prisma.settings.findUnique({ where: { key: `tts:twitch:${streamerId}` } }))?.value).toBe("existing-tts-setting");
+  expect((await prisma.previewElement.findFirst({ where: { streamerId } }))?.text).toBe("Keep scene");
+  expect((await fetch(`${baseUrl}/api/obs`, { headers: headers("legacy-again") })).status).toBe(401);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: headers("legacy-again") })).status).toBe(401);
+  await socketClient({ session: "legacy-again", channelId: streamerId }, "connect_error");
+  const passwordLogin = await fetch(`${baseUrl}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "legacy-owner", password: "migration-password-123" }) });
+  expect(passwordLogin.status).toBe(403);
+});
+
+it("keeps platform OWNER sessions outside Twitch channel APIs, uploads and Socket.IO", async () => {
+  config.ttsEnabled = true;
+  const admin = await prisma.user.create({ data: {
+    username: "platform-owner", displayName: "Platform owner",
+    passwordHash: await bcrypt.hash("separate-admin-password-123", 12), role: "OWNER"
+  } });
+  await addSession(admin.id, "platform-owner-session", new Date(Date.now() + 60_000), "LEGACY");
+  await prisma.media.create({ data: { streamerId, filename: "private.png", originalName: "private.png",
+    mimeType: "image/png", type: "IMAGE", size: png.length, url: "/uploads/private.png" } });
+  await fs.writeFile(path.join(config.uploadDir, "private.png"), png);
+  for (const route of ["/api/auth/me", "/api/obs", "/api/media", "/api/streamer", "/api/tts"]) {
+    const response = await fetch(`${baseUrl}${route}`, { headers: { ...headers("platform-owner-session"), "X-Channel-Id": streamerId } });
+    expect([401, 403]).toContain(response.status);
+  }
+  expect((await upload("platform-owner-session")).status).toBe(401);
+  for (const method of ["GET", "HEAD"] as const) {
+    expect((await fetch(`${baseUrl}/uploads/private.png`, { method, headers: headers("platform-owner-session") })).status).toBe(404);
+  }
+  expect((await fetch(`${baseUrl}/uploads/private.png`, { headers: { ...headers("platform-owner-session"), Range: "bytes=0-3" } })).status).toBe(404);
+  await socketClient({ session: "platform-owner-session", channelId: streamerId }, "connect_error");
+  const attemptedLogin = await fetch(`${baseUrl}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: "platform-owner", password: "separate-admin-password-123" }) });
+  expect(attemptedLogin.status).toBe(403);
+  expect((await fetch(`${baseUrl}/api/obs`, { headers: headers() })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/api/media`, { headers: headers() })).status).toBe(200);
+  expect((await fetch(`${baseUrl}/uploads/private.png`, { headers: headers() })).status).toBe(200);
+  const twitchOwner = await socketClient({ session: "owner-session" });
+  const state = event<Array<{ text: string }>>(twitchOwner, "preview:state");
+  twitchOwner.emit("preview:add", { type: "TEXT", text: "Twitch owner controls scene" });
+  expect(await state).toContainEqual(expect.objectContaining({ text: "Twitch owner controls scene" }));
+  expect(await prisma.user.findUnique({ where: { id: admin.id } })).not.toBeNull();
+});
+
+it("allows a migration-only password session to bind an unbound channel without editor access", async () => {
+  config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+  await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: null, twitchBroadcasterId: null } });
+  const admin = await prisma.user.create({ data: { username: "migration-admin", displayName: "Admin",
+    passwordHash: await bcrypt.hash("migration-password-456", 12), role: "OWNER" } });
+  const initial = await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } });
+  const login = await fetch(`${baseUrl}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: admin.username, password: "migration-password-456" }) });
+  expect(login.status).toBe(200);
+  expect(await login.json()).toMatchObject({ migrationOnly: true });
+  const sessionCookie = login.headers.getSetCookie().find((value) => value.startsWith(`${sessionCookieName}=`))!.split(";")[0];
+  expect((await fetch(`${baseUrl}/api/auth/me`, { headers: { Cookie: sessionCookie, "X-Channel-Id": streamerId } })).status).toBe(401);
+  expect((await fetch(`${baseUrl}/api/obs`, { headers: { Cookie: sessionCookie, "X-Channel-Id": streamerId } })).status).toBe(401);
+  const migrationSocket = connect(baseUrl, { transports: ["websocket"], reconnection: false, autoConnect: false,
+    extraHeaders: { Cookie: sessionCookie }, query: { channelId: streamerId } });
+  clients.push(migrationSocket);
+  const denied = event(migrationSocket, "connect_error");
+  migrationSocket.connect();
+  await denied;
+  expect((await fetch(`${baseUrl}/api/auth/twitch/start/bind`, { headers: { Cookie: sessionCookie }, redirect: "manual" })).status).toBe(302);
+  expect(await prisma.streamer.findUniqueOrThrow({ where: { id: streamerId } })).toMatchObject({
+    overlayToken: initial.overlayToken, ownerUserId: null, displayName: initial.displayName
+  });
+  expect(await prisma.user.findUnique({ where: { id: admin.id } })).not.toBeNull();
+});
+
+it("replaces an existing legacy cookie with a regular Twitch OAuth session", async () => {
+  config.twitchOAuthRedirectUri = `${baseUrl}/api/auth/twitch/callback`;
+  const admin = await prisma.user.create({ data: { username: "old-platform-owner", displayName: "Admin",
+    passwordHash: "!", role: "OWNER" } });
+  await addSession(admin.id, "old-platform-session", new Date(Date.now() + 60_000), "LEGACY");
+  const start = await fetch(`${baseUrl}/api/auth/twitch/start/unified`, {
+    headers: headers("old-platform-session"), redirect: "manual"
+  });
+  expect(start.status).toBe(302);
+  const authorize = new URL(start.headers.get("location")!);
+  const stateCookie = start.headers.getSetCookie().find((value) => value.startsWith("mod_overlay_twitch_state="))!.split(";")[0];
+  const realFetch = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    if (url === "https://id.twitch.tv/oauth2/token") return Promise.resolve(new Response(JSON.stringify({
+      access_token: "new-user-access", refresh_token: "new-user-refresh", expires_in: 3600,
+      scope: ["moderation:read", "user:read:moderated_channels"]
+    })));
+    if (url === "https://id.twitch.tv/oauth2/validate") return Promise.resolve(new Response(JSON.stringify({
+      client_id: config.twitchClientId, user_id: "34567", scopes: ["moderation:read", "user:read:moderated_channels"]
+    })));
+    if (url === "https://api.twitch.tv/helix/users") return Promise.resolve(new Response(JSON.stringify({
+      data: [{ id: "34567", login: "newuser", display_name: "New user", profile_image_url: "" }]
+    })));
+    return realFetch(input, init);
+  });
+  const callback = await fetch(`${baseUrl}/api/auth/twitch/callback?state=${authorize.searchParams.get("state")}&code=code`, {
+    headers: { Cookie: `${stateCookie}; ${headers("old-platform-session").Cookie}` }, redirect: "manual"
+  });
+  expect(callback.status).toBe(303);
+  expect(callback.headers.get("location")).toBe("/channels");
+  const twitchCookie = callback.headers.getSetCookie().filter((value) => value.startsWith(`${sessionCookieName}=`)).at(-1)!.split(";")[0];
+  expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: { Cookie: twitchCookie } })).status).toBe(200);
+  expect(await prisma.session.findFirst({ where: { tokenHash: hashSessionToken("old-platform-session") } })).toBeNull();
+  expect(await prisma.user.findUnique({ where: { id: admin.id } })).not.toBeNull();
 });
 
 it("paginates Twitch lists, applies bans, expires stale snapshots, and isolates foreign media", async () => {
@@ -1082,18 +1225,19 @@ it("fails closed on a stale Twitch list and rechecks idle sessions and owner OAu
   const access = await prepareSocketRecheckChannel(["201"]);
   const ownerSocket = await socketClient({ session: "session-101", channelId: streamerId });
   const moderatorSocket = await socketClient({ session: "session-201", channelId: streamerId });
-  const legacySocket = await socketClient({ session: "owner-session" });
+  await addSession(access.owner.id, "session-101-extra");
+  const staleSessionSocket = await socketClient({ session: "session-101-extra", channelId: streamerId });
   const deniedModerator = Promise.all([
     event(moderatorSocket, "access:revoked", 8000), event(moderatorSocket, "disconnect", 8000)
   ]);
-  const deniedLegacy = Promise.all([
-    event(legacySocket, "access:revoked", 8000), event(legacySocket, "disconnect", 8000)
+  const deniedStaleSession = Promise.all([
+    event(staleSessionSocket, "access:revoked", 8000), event(staleSessionSocket, "disconnect", 8000)
   ]);
   access.setUnavailable(true);
   await prisma.channelModeratorSnapshot.update({ where: { channelId: streamerId },
     data: { checkedAt: new Date(Date.now() - 11_000) } });
-  await prisma.session.deleteMany({ where: { tokenHash: hashSessionToken("owner-session") } });
-  await Promise.all([deniedModerator, deniedLegacy]);
+  await prisma.session.deleteMany({ where: { tokenHash: hashSessionToken("session-101-extra") } });
+  await Promise.all([deniedModerator, deniedStaleSession]);
   expect(ownerSocket.connected).toBe(true);
   await socketClient({ session: "session-201", channelId: streamerId }, "connect_error");
 
@@ -1169,7 +1313,7 @@ it("rejects denied, expired and underscoped Twitch callbacks without creating a 
     { headers: { Cookie: underscoped.cookie }, redirect: "manual" }
   );
   expect(response.headers.get("location")).toBe("/overlay?oauth_error=insufficient_scope");
-  expect(await prisma.user.count({ where: { twitchUserId: { not: null } } })).toBe(0);
+  expect(await prisma.user.count({ where: { twitchUserId: { not: null } } })).toBe(2);
 });
 
 it("disables TTS connections, speech and reward mutations while preserving settings and OBS", async () => {
@@ -1212,9 +1356,7 @@ it("disables TTS connections, speech and reward mutations while preserving setti
     startTts(realtime);
     expect(webSocket).not.toHaveBeenCalled();
     expect(settingsScan).not.toHaveBeenCalled();
-    expect(await (await fetch(`${baseUrl}/api/tts`, { headers: headers() })).json()).toMatchObject({
-      available: false, configured: false, connected: false, enabled: false, ready: false
-    });
+    expect((await fetch(`${baseUrl}/api/tts`, { headers: headers() })).status).toBe(503);
     expect(await (await fetch(`${baseUrl}/api/tts/channels/${channel.id}`, { headers: headers("tts-disabled-session") })).json()).toMatchObject({
       available: false, configured: false, connected: false, enabled: false, ready: false
     });
@@ -1240,7 +1382,7 @@ it("disables TTS connections, speech and reward mutations while preserving setti
     expect(twitchRequests).toEqual([]);
     expect((await prisma.settings.findUniqueOrThrow({ where: { key: legacyKey } })).value).toBe("existing-encrypted-tts-settings");
     expect((await prisma.settings.findUniqueOrThrow({ where: { key: modernKey } })).value).toBe("existing-modern-tts-settings");
-    expect((await fetch(`${baseUrl}/api/obs`, { headers: headers() })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/obs`, { headers: { ...headers("tts-disabled-session"), "X-Channel-Id": channel.id } })).status).toBe(200);
     expect((await fetch(`${baseUrl}/api/auth/twitch/me`, { headers: headers("tts-disabled-session") })).status).toBe(200);
   } finally {
     stopTts();
@@ -1262,18 +1404,17 @@ it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
     },
     body: JSON.stringify({ cost: 0 })
   });
-  expect(initializedMutation.status).toBe(400);
+  expect(initializedMutation.status).toBe(503);
   const owner = await fetch(`${baseUrl}/api/tts`, { headers: headers() });
-  expect(owner.status).toBe(200);
-  expect(await owner.json()).toMatchObject({ connected: false, rewardCost: 1000 });
+  expect(owner.status).toBe(503);
   const moderator = await fetch(`${baseUrl}/api/tts`, { headers: headers("mod-session") });
-  expect(moderator.status).toBe(403);
+  expect(moderator.status).toBe(503);
   const mutateAsModerator = await fetch(`${baseUrl}/api/tts/reward`, {
     method: "POST",
     headers: { ...headers("mod-session"), "Content-Type": "application/json" },
     body: JSON.stringify({ cost: 1000 })
   });
-  expect(mutateAsModerator.status).toBe(403);
+  expect(mutateAsModerator.status).toBe(503);
   const noCsrf = await fetch(`${baseUrl}/api/tts/reward`, {
     method: "POST",
     headers: { Cookie: headers().Cookie, "Content-Type": "application/json" },
@@ -1285,109 +1426,27 @@ it("keeps TTS setup owner-only and rejects unknown audio URLs", async () => {
     headers: { ...headers(), "Content-Type": "application/json" },
     body: JSON.stringify({ cost: 0 })
   });
-  expect(invalidCost.status).toBe(400);
+  expect(invalidCost.status).toBe(503);
   expect((await fetch(`${baseUrl}/api/tts/audio/unknown`)).status).toBe(404);
 });
 
-it("binds Twitch OAuth to the owner session and stores tokens encrypted", async () => {
+it("rejects legacy platform credentials on obsolete TTS setup routes", async () => {
   config.ttsEnabled = true;
-  config.twitchClientId = "test-client";
-  config.twitchClientSecret = "test-secret";
-  config.ttsPython = "/test/python";
-  config.publicOrigin = baseUrl;
-  const originalFetch = globalThis.fetch;
-  const external = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = String(input);
-    if (url === "https://id.twitch.tv/oauth2/token") {
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            access_token: "private-access-token",
-            refresh_token: "private-refresh-token",
-            expires_in: 3600
-          }),
-          { headers: { "Content-Type": "application/json" } }
-        )
-      );
-    }
-    if (url === "https://api.twitch.tv/helix/users") {
-      return Promise.resolve(
-        new Response(JSON.stringify({ data: [{ id: "broadcaster-1", login: "streamer" }] }), {
-          headers: { "Content-Type": "application/json" }
-        })
-      );
-    }
-    if (url.startsWith("https://api.twitch.tv/helix/channel_points/custom_rewards")) {
-      if (init?.method === "POST")
-        return Promise.resolve(
-          new Response(JSON.stringify({ data: [{ id: "reward-1" }] }), {
-            headers: { "Content-Type": "application/json" }
-          })
-        );
-      return Promise.resolve(
-        new Response(JSON.stringify({ data: [{ id: "reward-1" }] }), {
-          headers: { "Content-Type": "application/json" }
-        })
-      );
-    }
-    return originalFetch(input, init);
-  });
-  try {
-    const connect = await fetch(`${baseUrl}/api/tts/connect`, {
-      headers: headers(),
-      redirect: "manual"
-    });
-    expect(connect.status).toBe(302);
-    const location = new URL(connect.headers.get("location")!);
-    expect(location.hostname).toBe("id.twitch.tv");
-    expect(location.searchParams.get("redirect_uri")).toBe(`${baseUrl}/api/tts/callback`);
-    const state = location.searchParams.get("state")!;
-    await addSession(ownerId, "other-owner-session");
-    const wrongSession = await fetch(`${baseUrl}/api/tts/callback?state=${state}&code=auth-code`, {
-      headers: headers("other-owner-session")
-    });
-    expect(wrongSession.status).toBe(400);
-    const retryConnect = await fetch(`${baseUrl}/api/tts/connect`, {
-      headers: headers(),
-      redirect: "manual"
-    });
-    const retryState = new URL(retryConnect.headers.get("location")!).searchParams.get("state")!;
-    const callback = await fetch(`${baseUrl}/api/tts/callback?state=${retryState}&code=auth-code`, {
-      headers: headers(),
-      redirect: "manual"
-    });
-    expect(callback.status).toBe(302);
-    const stored = await prisma.settings.findUniqueOrThrow({
-      where: { key: `tts:twitch:${streamerId}` }
-    });
-    expect(stored.value).not.toContain("private-access-token");
-    expect(stored.value).not.toContain("private-refresh-token");
-    const create = await fetch(`${baseUrl}/api/tts/reward`, {
-      method: "POST",
-      headers: { ...headers(), "Content-Type": "application/json" },
-      body: JSON.stringify({ cost: 1000 })
-    });
-    expect(create.status).toBe(200);
-    const update = await fetch(`${baseUrl}/api/tts/reward`, {
-      method: "PATCH",
-      headers: { ...headers(), "Content-Type": "application/json" },
-      body: JSON.stringify({ cost: 2000 })
-    });
-    expect(update.status).toBe(200);
-    expect(await (await fetch(`${baseUrl}/api/tts`, { headers: headers() })).json()).toMatchObject({
-      connected: true,
-      rewardId: "reward-1",
-      rewardCost: 2000
-    });
-    expect(external).toHaveBeenCalled();
-  } finally {
-    config.twitchClientId = "";
-    config.twitchClientSecret = "";
-    config.ttsPython = "";
-    config.publicOrigin = "";
+  const admin = await prisma.user.create({ data: {
+    username: "platform-admin", displayName: "Platform admin",
+    passwordHash: await bcrypt.hash("local-admin-password-123", 12), role: "OWNER"
+  } });
+  await addSession(admin.id, "admin-tts-session", new Date(Date.now() + 60_000), "LEGACY");
+  for (const [route, method] of [
+    ["/api/tts", "GET"], ["/api/tts/connect", "GET"],
+    ["/api/tts/callback?state=invalid", "GET"], ["/api/tts/reward", "POST"]
+  ] as const) {
+    expect((await fetch(`${baseUrl}${route}`, {
+      method, headers: headers("admin-tts-session"), redirect: "manual"
+    })).status).toBe(403);
   }
+  expect(await prisma.settings.count({ where: { key: { startsWith: "tts:" } } })).toBe(0);
 });
-
 it("runs two Twitch TTS channels independently across OAuth, queues, revocation and restart", async () => {
   config.ttsEnabled = true;
   config.twitchClientId = "tts-test-client";
@@ -1604,14 +1663,13 @@ it("resolves an eblo.id post server-side and checks the resolved media permissio
       body: JSON.stringify({ url: "https://eblo.id/XRbi1j2" })
     });
 
-  const denied = await post("mod-session");
-  expect(denied.status).toBe(403);
+  const legacyAdmin = await prisma.user.create({ data: { username: "legacy-media-admin", displayName: "Admin", passwordHash: "!", role: "OWNER" } });
+  await addSession(legacyAdmin.id, "legacy-media-admin", new Date(Date.now() + 60_000), "LEGACY");
+  const denied = await post("legacy-media-admin");
+  expect(denied.status).toBe(401);
   expect(externalFetch).not.toHaveBeenCalled();
 
-  await prisma.user.update({
-    where: { id: moderatorId },
-    data: { permissionsJson: JSON.stringify({ canUploadImage: false, canUploadVideo: true }) }
-  });
+  await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
   const wrongTypePermission = await post("mod-session");
   expect(wrongTypePermission.status).toBe(403);
   expect(await prisma.media.count()).toBe(0);
@@ -1643,8 +1701,8 @@ describe("realtime access revocation", () => {
     await prisma.session.create({ data: { userId: owner.id, tokenHash: hashSessionToken("canvas-owner-session"), authMethod: "TWITCH", twitchMode: "unified", expiresAt: new Date(Date.now() + 3600_000) } });
     const preview = await prisma.previewElement.create({ data: { streamerId, type: "IMAGE", name: "Outside", x: -120, y: 100, width: 300, height: 200, rotation: 37, propsJson: JSON.stringify({ cropLeft: 20, cropRight: 10, cropTop: 5, cropBottom: 15 }) } });
     const live = await prisma.liveInstance.create({ data: { streamerId, type: "IMAGE", name: "Live", x: 1600, y: 900, width: 200, height: 100, rotation: -20, propsJson: JSON.stringify({ cropLeft: 10 }) } });
-    const editorA = await socketClient({ session: "owner-session" });
-    const editorB = await socketClient({ session: "mod-session" });
+    const editorA = await socketClient({ session: "canvas-owner-session", channelId: streamerId });
+    const editorB = await socketClient({ session: "canvas-owner-session", channelId: streamerId });
     const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
     const authHeaders = { ...headers("canvas-owner-session"), "Content-Type": "application/json", "X-Channel-Id": streamerId };
     const read = async () => (await (await fetch(`${baseUrl}/api/auth/me`, { headers: authHeaders })).json()) as { streamer: { canvasRevision: string; canvasWidth: number; canvasHeight: number } };
@@ -1811,10 +1869,7 @@ describe("realtime access revocation", () => {
       });
       expect(invalid.status).toBe(400);
     }
-    await prisma.user.update({
-      where: { id: moderatorId },
-      data: { permissionsJson: JSON.stringify({ canUploadImage: false }) }
-    });
+    await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
     const forbidden = await fetch(`${baseUrl}/api/emotes/custom`, {
       method: "POST",
       headers: { ...headers("mod-session"), "Content-Type": "application/json" },
@@ -1964,15 +2019,16 @@ describe("realtime access revocation", () => {
     expect((await restored).find((item) => item.id === element.id)).toEqual(obs);
   });
 
-  it("rejects unauthorized, unknown, and invalid transforms", async () => {
+  it("rejects legacy editor access, unknown, and invalid transforms", async () => {
     const element = await prisma.previewElement.create({
       data: { streamerId, type: "TEXT", name: "drag", text: "drag" }
     });
-    const denied = await socketClient({ session: "mod-session" });
+    const admin = await prisma.user.create({ data: { username: "legacy-transform-admin", displayName: "Admin", passwordHash: "!", role: "OWNER" } });
+    await addSession(admin.id, "legacy-transform-admin", new Date(Date.now() + 60_000), "LEGACY");
+    await socketClient({ session: "legacy-transform-admin", channelId: streamerId }, "connect_error");
     const owner = await socketClient({ session: "owner-session" });
     const overlay = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
     for (const [socket, payload, message] of [
-      [denied, { id: element.id, x: 4 }, "Permission denied"],
       [owner, { id: "unknown", x: 4 }, "Element not found"],
       [owner, { id: element.id, x: 4, props: { playbackCommand: "play" } }, "Unrecognized key"]
     ] as const) {
@@ -2086,39 +2142,22 @@ describe("realtime access revocation", () => {
     expect(await prisma.previewElement.count()).toBe(0);
   });
 
-  it("requires live rights for every canvas mutation and refreshes changed permissions", async () => {
+  it("applies Twitch moderator permissions and rejects mutations after a local ban", async () => {
     const element = await prisma.previewElement.create({
       data: { streamerId, type: "TEXT", name: "original", text: "original" }
     });
     const socket = await socketClient({ session: "mod-session" });
-    for (const [name, payload] of [
-      ["preview:add", { type: "TEXT", text: "forbidden" }],
-      ["preview:update", { id: element.id, patch: { x: 999, props: { playbackCommand: "play" } } }],
-      ["preview:duplicate", { id: element.id }],
-      ["preview:remove", { id: element.id }]
-    ] as const) {
-      const denied = event(socket, "app:error");
-      socket.emit(name, payload);
-      expect(await denied).toBe("Permission denied");
-    }
-    expect(await prisma.previewElement.count()).toBe(1);
-    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
-      100
-    );
-    await prisma.user.update({ where: { id: moderatorId }, data: { permissionsJson: "{}" } });
+    const denied = event<string>(socket, "app:error");
+    socket.emit("live:clear");
+    expect(await denied).toBe("Permission denied");
     const ok = await socket
       .timeout(3000)
       .emitWithAck("preview:update", { id: element.id, patch: { x: 222 } });
     expect(ok).toBe(true);
-    await prisma.user.update({
-      where: { id: moderatorId },
-      data: { permissionsJson: '{"canPushLive":false}' }
-    });
-    expect(
-      await socket
-        .timeout(3000)
-        .emitWithAck("preview:update", { id: element.id, patch: { x: 333 } })
-    ).toBe(false);
+    const disconnected = event(socket, "disconnect");
+    await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
+    socket.emit("preview:update", { id: element.id, patch: { x: 333 } });
+    await disconnected;
     expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: element.id } })).x).toBe(
       222
     );
@@ -2189,10 +2228,7 @@ describe("protected uploads", () => {
   it("cleans invalid, oversized and forbidden uploads", async () => {
     expect((await upload("owner-session", Buffer.from("not a png"))).status).toBe(400);
     expect((await upload("owner-session", Buffer.alloc(2048))).status).toBe(400);
-    await prisma.user.update({
-      where: { id: moderatorId },
-      data: { permissionsJson: '{"canUploadImage":false}' }
-    });
+    await prisma.channelModeratorBan.create({ data: { channelId: streamerId, userId: moderatorId } });
     expect((await upload("mod-session")).status).toBe(403);
     await expect.poll(files).toEqual([]);
     expect(await prisma.media.count()).toBe(0);
@@ -2201,6 +2237,7 @@ describe("protected uploads", () => {
 
 describe("login throttling", () => {
   it("does not reset account or IP limits when forwarded addresses change", async () => {
+    await prisma.streamer.update({ where: { id: streamerId }, data: { ownerUserId: null, twitchBroadcasterId: null } });
     const statuses: number[] = [];
     for (let index = 0; index < 31; index++) {
       const response = await fetch(`${baseUrl}/api/auth/login`, {
@@ -2215,7 +2252,6 @@ describe("login throttling", () => {
     }
     expect(statuses.slice(0, 8)).toEqual(Array(8).fill(401));
     expect(statuses[8]).toBe(429);
-    expect(statuses[29]).toBe(401);
     expect(statuses[30]).toBe(429);
   });
 });

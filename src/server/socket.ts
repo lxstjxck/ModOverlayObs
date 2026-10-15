@@ -258,17 +258,16 @@ export function configureSocket(httpServer: HttpServer): Server {
       }
 
       const session = await getSessionFromCookieHeader(socket.handshake.headers.cookie);
-      if (!session) {
-        finish(new Error("Authentication required"));
+      if (session?.authMethod !== "TWITCH" || session.twitchMode !== "unified") {
+        finish(new Error("Twitch authentication required"));
         return;
       }
       const requestedChannel = readStringQuery(socket.handshake.query.channelId);
-      const streamer = session.authMethod === "TWITCH" && requestedChannel
+      const streamer = requestedChannel
         ? await prisma.streamer.findUnique({ where: { id: requestedChannel } })
         : await getDefaultStreamer();
       const role = streamer ? await channelRole(session, streamer.id) : null;
-      if (!streamer || (session.authMethod === "TWITCH" && requestedChannel !== streamer.id) ||
-          (requestedChannel && requestedChannel !== streamer.id) || !role) {
+      if (!streamer || requestedChannel !== streamer.id || !role) {
         finish(new Error("Channel access denied"));
         return;
       }
@@ -276,7 +275,7 @@ export function configureSocket(httpServer: HttpServer): Server {
         finish(new Error("Session expired"));
         return;
       }
-      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: session.authMethod === "TWITCH" ? { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" } : session.user });
+      contexts.set(socket, { kind: "moderator", streamerId: streamer.id, user: { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" } });
       expiryTimer = setTimeout(revoke, Math.max(0, session.expiresAt.getTime() - Date.now()));
       expiryTimer.unref();
       finish();

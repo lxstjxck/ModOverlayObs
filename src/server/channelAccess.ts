@@ -215,10 +215,7 @@ export async function syncModerators(channelId: string): Promise<Set<string>> {
 async function resolveChannelRole(session: Session & { user: { id: string; twitchUserId: string | null; role: string } }, channelId: string, moderatorIds?: ReadonlySet<string>): Promise<"owner" | "moderator" | null> {
   const channel = await prisma.streamer.findUnique({ where: { id: channelId }, select: { ownerUserId: true, twitchBroadcasterId: true } });
   if (!channel) return null;
-  if (session.authMethod === "LEGACY") {
-    const first = await prisma.streamer.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
-    return first?.id === channelId ? session.user.role === "OWNER" ? "owner" : "moderator" : null;
-  }
+  if (session.authMethod !== "TWITCH") return null;
   if (session.twitchMode !== "unified" || !session.user.twitchUserId) return null;
   const connection = await prisma.twitchOAuthConnection.findUnique({
     where: { userId_mode: { userId: session.user.id, mode: "unified" } },

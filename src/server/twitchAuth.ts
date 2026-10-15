@@ -80,16 +80,12 @@ export function twitchAuthRouter(): express.Router {
       return;
     }
     const existing = await getSessionFromCookieHeader(request.headers.cookie);
-    if (mode === "bind" && (existing?.authMethod !== "LEGACY" || existing.user.role !== "OWNER")) {
+    if (mode === "bind" && (existing?.authMethod !== "LEGACY" || existing.user.role !== "OWNER" || existing.user.twitchUserId)) {
       response.status(403).json({ error: "Legacy owner session required" });
       return;
     }
     if (mode === "bind" && (await getDefaultStreamer()).ownerUserId) {
       response.status(409).json({ error: "Channel is already bound" });
-      return;
-    }
-    if (mode !== "bind" && existing?.authMethod === "LEGACY") {
-      fail(response, "legacy_session", popup);
       return;
     }
     const state = crypto.randomBytes(32).toString("base64url");
@@ -155,13 +151,10 @@ export function twitchAuthRouter(): express.Router {
     if (grant.mode === "bind" && (
       existing?.authMethod !== "LEGACY" ||
       existing.user.role !== "OWNER" ||
+      existing.user.twitchUserId ||
       grant.legacySessionHash !== hashSessionToken(readSessionToken(request.headers.cookie) ?? "")
     )) {
       fail(response, "legacy_owner_required", popup);
-      return;
-    }
-    if (grant.mode !== "bind" && existing?.authMethod === "LEGACY") {
-      fail(response, "legacy_session", popup);
       return;
     }
     if (request.query.error) {

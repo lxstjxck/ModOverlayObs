@@ -139,21 +139,20 @@ export async function requireAuth(
 
 export async function requireEditorAuth(request: Request, response: Response, next: NextFunction): Promise<void> {
   const session = await getSessionFromCookieHeader(request.headers.cookie);
-  if (!session) { response.status(401).json({ error: "Authentication required" }); return; }
+  if (session?.authMethod !== "TWITCH" || session.twitchMode !== "unified") {
+    response.status(401).json({ error: "Twitch authentication required" }); return;
+  }
   const requested = request.get("x-channel-id") ?? request.query.channelId;
-  const channel = session.authMethod === "TWITCH" && typeof requested === "string"
+  const channel = typeof requested === "string"
     ? await prisma.streamer.findUnique({ where: { id: requested } })
     : await getDefaultStreamer();
   const role = channel ? await channelRole(session, channel.id) : null;
-  if (!channel || (session.authMethod === "TWITCH" && requested !== channel.id) ||
-      (requested && requested !== channel.id) || !role) {
+  if (!channel || requested !== channel.id || !role) {
     response.status(403).json({ error: "Channel access denied" }); return;
   }
   const authorized = request as AuthenticatedRequest;
   authorized.channel = channel;
-  authorized.user = session.authMethod === "TWITCH"
-    ? { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" }
-    : session.user;
+  authorized.user = { ...session.user, role: role === "owner" ? "OWNER" : "MODERATOR", permissionsJson: "{}" };
   next();
 }
 

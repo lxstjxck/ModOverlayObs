@@ -19,7 +19,7 @@ export function LoginPage() {
         method: "POST",
         body: JSON.stringify({ username, password })
       });
-      window.location.href = "/app";
+      window.location.href = "/api/auth/twitch/start/bind";
     } catch (loginError) {
       setError(loginError instanceof Error ? loginError.message : "Login failed");
     } finally {
@@ -38,12 +38,12 @@ export function LoginPage() {
       <div className="lxst-auth-content lxst-auth-content-legacy lxst-shell">
         <div className="lxst-auth-intro">
           <p className="landing-eyebrow">
-            <span className="landing-eyebrow-line" /> СУЩЕСТВУЮЩАЯ ПАНЕЛЬ
+            <span className="landing-eyebrow-line" /> ПЕРЕНОС КАНАЛА
           </p>
           <h1>
-            Вход для <em>OWNER.</em>
+            Привязка к <em>Twitch.</em>
           </h1>
-          <p>Парольный вход для существующей учётной записи владельца.</p>
+          <p>Пароль нужен только для переноса ещё не привязанного канала. Управление сценой доступно после входа через Twitch.</p>
         </div>
         <form
           className="lxst-auth-card lxst-legacy-form"
