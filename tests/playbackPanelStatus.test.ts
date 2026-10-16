@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getPlaybackDisplayState,
+  getPlaybackProblem,
+  getPlaybackStatusLabel,
   PlaybackStatusRow,
   PropertiesPanel
 } from "../src/client/components/PropertiesPanel";
@@ -40,20 +42,41 @@ describe("video control status", () => {
     expect(getPlaybackDisplayState(undefined, pending, false)).toBe("OFFLINE");
     expect(getPlaybackDisplayState({ ...status, state: "BUFFERING" }, pending, false)).toBe("BUFFERING");
     expect(getPlaybackDisplayState({ ...status, state: "ERROR", errorCode: 153 }, pending, true)).toBe("ERROR");
+    expect(getPlaybackDisplayState({ ...status, state: "UNKNOWN" }, pending, false)).toBe("UNKNOWN");
   });
 
-  it("keeps one status row and the timeline mounted across WAITING and OFFLINE", () => {
+  it("uses short Russian labels and user facing playback errors", () => {
+    expect(getPlaybackStatusLabel("PLAYING")).toBe("Воспроизводится");
+    expect(getPlaybackStatusLabel("WAITING")).toBe("Ожидание ответа");
+    expect(getPlaybackStatusLabel("OFFLINE")).toBe("OBS не подключён");
+    expect(getPlaybackStatusLabel("ERROR")).toBe("Ошибка воспроизведения");
+    expect(getPlaybackProblem({ ...status, state: "ERROR", errorCode: 153 })).toBe("Видео недоступно");
+    expect(getPlaybackProblem({ ...status, issue: "AUTOPLAY_BLOCKED" })).toBe("Воспроизведение заблокировано");
+    expect(getPlaybackProblem({ ...status, issue: "COMMAND_TIMEOUT" })).toBe("OBS не отвечает");
+  });
+
+  it("shows source selection only when needed and keeps technical data in details", () => {
     vi.stubGlobal("React", React);
     vi.stubGlobal("HTMLIFrameElement", class {});
-    const row = (label: string) => renderToStaticMarkup(React.createElement(PlaybackStatusRow, {
-      label, sources: [status], selectedConnectionId: status.connectionId, onSourceChange: () => {}
+    const row = (state: "PLAYING" | "PAUSED" | "WAITING" | "OFFLINE", sources = [status],
+      selectedConnectionId = status.connectionId) => renderToStaticMarkup(React.createElement(PlaybackStatusRow, {
+      state, sources, selectedConnectionId, onSourceChange: () => {}
     }));
-    const normalize = (html: string) => html.replace(/title="[^"]*"/, 'title="STATUS"').replace(
-      /(<span class="media-playback-status-label"[^>]*>).*?(<\/span>)/, "$1STATUS$2"
-    );
-    for (const state of ["PLAYING", "PAUSED", "STOPPED", "WAITING", "OFFLINE"]) {
-      expect(normalize(row(`OBS obs-conn · ${state}`))).toBe(normalize(row("OBS obs-conn · PLAYING")));
+    expect(row("PLAYING")).not.toContain("media-sources-button");
+    expect(row("PLAYING", [status, { ...status, connectionId: "second" }]))
+      .toContain("Источники (2)");
+    expect(row("OFFLINE", [status], "obs-disconnected")).toContain("Источники (1)");
+    expect(row("OFFLINE", [], "obs-disconnected")).not.toContain("media-sources-button");
+    expect(row("PLAYING").split("<details")[0]).not.toContain(status.connectionId);
+    expect(row("PLAYING")).toContain(`OBS: ${status.connectionId}`);
+    for (const state of ["PLAYING", "PAUSED", "WAITING", "OFFLINE"] as const) {
+      expect(row(state)).toContain('class="media-playback-status"');
     }
+  });
+
+  it("keeps the transport and timeline mounted across status changes", () => {
+    vi.stubGlobal("React", React);
+    vi.stubGlobal("HTMLIFrameElement", class {});
     const renderPanel = (mediaStatuses: MediaStatus[]) => renderToStaticMarkup(
       React.createElement(PropertiesPanel, {
         selected: video, mediaStatuses, onUpdate: () => {}, onDuplicate: () => {}, onRemove: () => {}
@@ -74,17 +97,22 @@ describe("video control status", () => {
       selected: video, mediaStatuses: [], selectedConnectionId: "obs-disconnected",
       onUpdate: () => {}, onDuplicate: () => {}, onRemove: () => {}
     }));
-    expect(offline).toContain("OFFLINE");
+    expect(offline).toContain("OBS не подключён");
     expect(offline).toContain("obs-disconnected");
-    expect(offline).toMatch(/aria-label="OBS source"[^>]*>/);
+    expect(offline).toContain("Выбранный источник недоступен");
+    expect(offline).not.toContain("media-sources-button");
     expect(offline).toMatch(/aria-label="Перемотка по таймкоду"[^>]*disabled=""/);
     const readOnly = renderToStaticMarkup(React.createElement(PropertiesPanel, {
       selected: video, mediaStatuses: [status], canControlPlayback: false,
       onUpdate: () => {}, onDuplicate: () => {}, onRemove: () => {}
     }));
     expect(readOnly).toMatch(/aria-label="Перемотка по таймкоду"[^>]*disabled=""/);
+    const playbackError = renderPanel([{ ...status, state: "ERROR", errorCode: 153 }]);
+    expect(playbackError).toContain("Ошибка воспроизведения");
+    expect(playbackError).toContain("Видео недоступно");
+    expect(playbackError).toContain("Код ошибки YouTube: 153");
     const css = readFileSync(new URL("../src/client/broadcastConsole.css", import.meta.url), "utf8");
-    expect(css).toMatch(/\.moderator-app \.media-playback-status\s*\{[^}]*height:\s*32px/s);
-    expect(css).toMatch(/\.moderator-app \.media-playback-status-label\s*\{[^}]*white-space:\s*nowrap/s);
+    expect(css).toMatch(/\.moderator-app \.media-playback-status\s*\{[^}]*height:\s*36px/s);
+    expect(css).toMatch(/\.moderator-app \.media-playback-status-label\s*\{[^}]*line-height:\s*1\.3/s);
   });
 });

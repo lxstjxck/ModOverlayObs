@@ -791,27 +791,81 @@
 .moderator-app .media-playback-status {
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, 96px);
+  grid-template-columns: 8px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   min-width: 0;
-  height: 32px;
-  overflow: hidden;
+  height: 36px;
   color: #c6c0d0;
   font-size: 13px;
 }
 
-.moderator-app .media-playback-status-label {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.moderator-app .media-playback-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9b9ba3;
 }
 
-.moderator-app .media-playback-status select {
-  width: 100%;
+.moderator-app .media-playback-indicator--playing { background: #75c996; }
+.moderator-app .media-playback-indicator--waiting,
+.moderator-app .media-playback-indicator--buffering { background: #e8c682; }
+.moderator-app .media-playback-indicator--error,
+.moderator-app .media-playback-indicator--offline { background: #ff9da9; }
+
+.moderator-app .media-playback-status-label {
   min-width: 0;
-  height: 28px;
+  line-height: 1.3;
+}
+
+.moderator-app .media-sources-button {
+  min-width: 0;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.moderator-app .media-source-options {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.moderator-app .media-source-options button {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.moderator-app .media-source-options button.active {
+  border-color: var(--console-accent);
+}
+
+.moderator-app .media-source-offline,
+.moderator-app .media-playback-notice {
+  color: #e8c682;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.moderator-app .media-playback-details {
+  margin-top: 4px;
+  color: #a0a0a6;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.moderator-app .media-playback-details summary {
+  cursor: pointer;
+}
+
+.moderator-app .media-playback-details[open] > div {
+  margin-top: 4px;
 }
 
 .moderator-app .media-preview-notice {

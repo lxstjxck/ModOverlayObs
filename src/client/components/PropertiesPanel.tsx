@@ -276,7 +276,6 @@ function MediaControls({
     const timer = window.setTimeout(() => setWaitingCommandId(commandId), 400);
     return () => window.clearTimeout(timer);
   }, [awaitingConfirmation, commandId, selectedStatus?.connectionId]);
-  const youtubePreview = mediaElement instanceof HTMLIFrameElement;
   const hasTime = Boolean(selectedStatus);
   const videoTime = selectedStatus
     ? { current: selectedStatus.position, duration: selectedStatus.duration }
@@ -285,15 +284,8 @@ function MediaControls({
   const playbackState = getPlaybackDisplayState(
     selectedStatus, selected.props, awaitingConfirmation && waitingCommandId === commandId
   );
-  const statusDetail = selectedStatus?.errorCode ? ` (${selectedStatus.errorCode})`
-    : selectedStatus?.issue ? ` (${selectedStatus.issue.replaceAll("_", " ").toLowerCase()})` : "";
-  const statusLabel = selectedStatus
-    ? `OBS ${selectedStatus.connectionId.slice(0, 4)} · ${playbackState}${statusDetail}`
-    : selectedConnectionId ? `OBS ${selectedConnectionId.slice(0, 4)} · OFFLINE`
-      : youtubePreview ? "OBS OFFLINE · preview unsynced" : "OBS OFFLINE · no telemetry";
-  const statusTitle = selectedStatus
-    ? `OBS ${selectedStatus.connectionId} · ${playbackState}${statusDetail}`
-    : selectedConnectionId ? `OBS ${selectedConnectionId} · OFFLINE` : statusLabel;
+  const problem = getPlaybackProblem(selectedStatus);
+  const sourceUnavailable = Boolean(selectedConnectionId && !selectedStatus);
 
   useEffect(() => {
     setPositionText("");
@@ -387,14 +379,22 @@ function MediaControls({
   return (
     <div className="video-controls">
       <PlaybackStatusRow
-        label={statusLabel}
-        title={statusTitle}
+        state={playbackState}
         sources={sources}
         selectedConnectionId={selectedConnectionId || selectedStatus?.connectionId || ""}
         onSourceChange={onSourceChange}
       />
+      {sourceUnavailable &&
+        <div className="media-playback-notice" role="status">
+          {sources.length > 0
+            ? "Выбранный источник недоступен. Выберите активный источник."
+            : "Выбранный источник недоступен."}
+        </div>}
+      {problem && <div className="media-playback-notice" role="alert">{problem}</div>}
       {previewIssue === "AUTOPLAY_BLOCKED" &&
-        <div className="media-preview-notice" role="status">Preview autoplay blocked. Press Play to start.</div>}
+        <div className="media-preview-notice" role="status">
+          Предпросмотр заблокирован. Нажмите «Воспроизвести».
+        </div>}
       <div className="mini-toolbar media-transport">
         <button
           type="button"
@@ -573,42 +573,88 @@ export function getPlaybackDisplayState(
   if (showWaiting) return "WAITING";
   if (props.playbackCommand === "stop" && props.playbackCommandId === status.commandId &&
       status.position <= 0.25) return "STOPPED";
-  if (status.state && status.state !== "UNKNOWN") return status.state;
+  if (status.state) return status.state;
   if (status.playing) return "PLAYING";
   return "PAUSED";
 }
 
+export type PlaybackDisplayState = ReturnType<typeof getPlaybackDisplayState>;
+
+export function getPlaybackStatusLabel(state: PlaybackDisplayState): string {
+  const labels: Record<PlaybackDisplayState, string> = {
+    PLAYING: "Воспроизводится",
+    PAUSED: "Пауза",
+    STOPPED: "Остановлено",
+    BUFFERING: "Загрузка видео",
+    WAITING: "Ожидание ответа",
+    ENDED: "Завершено",
+    UNSTARTED: "Не запущено",
+    ERROR: "Ошибка воспроизведения",
+    OFFLINE: "OBS не подключён",
+    UNKNOWN: "Состояние неизвестно"
+  };
+  return labels[state];
+}
+
+export function getPlaybackProblem(status: MediaStatus | undefined): string | null {
+  if (!status) return null;
+  if (status.issue === "AUTOPLAY_BLOCKED") return "Воспроизведение заблокировано";
+  if (status.issue === "COMMAND_TIMEOUT") return "OBS не отвечает";
+  if (status.issue === "API_UNAVAILABLE") return "Видео недоступно";
+  if (status.state === "ERROR" || status.errorCode) return "Видео недоступно";
+  return null;
+}
+
 export function PlaybackStatusRow({
-  label,
-  title,
+  state,
   sources,
   selectedConnectionId,
   onSourceChange
 }: {
-  label: string;
-  title?: string;
+  state: PlaybackDisplayState;
   sources: MediaStatus[];
   selectedConnectionId: string;
   onSourceChange: (id: string) => void;
 }) {
+  const [sourcesOpen, setSourcesOpen] = useState(false);
+  const selectedSource = sources.find((source) => source.connectionId === selectedConnectionId);
+  const selectedIsOffline = Boolean(selectedConnectionId &&
+    !selectedSource);
+  const showSourcePicker = sources.length > 1 || (selectedIsOffline && sources.length > 0);
   return (
-    <div className="media-playback-status" role="status" aria-live="polite">
-      <span className="media-playback-status-label" title={title ?? label}>{label}</span>
-      <select
-        aria-label="OBS source"
-        title={selectedConnectionId ? `OBS ${selectedConnectionId}` : "Automatic OBS source"}
-        value={selectedConnectionId}
-        onChange={(event) => onSourceChange(event.target.value)}
-      >
-        <option value="">Auto</option>
-        {selectedConnectionId && !sources.some((source) => source.connectionId === selectedConnectionId) &&
-          <option value={selectedConnectionId}>OBS {selectedConnectionId.slice(0, 8)} (offline)</option>}
-        {sources.map((source) => (
-          <option key={source.connectionId} value={source.connectionId}>
-            OBS {source.connectionId.slice(0, 8)}
-          </option>
-        ))}
-      </select>
+    <div className="media-playback-block">
+      <div className="media-playback-status" role="status" aria-live="polite">
+        <span className={`media-playback-indicator media-playback-indicator--${state.toLowerCase()}`} aria-hidden="true" />
+        <span className="media-playback-status-label">{getPlaybackStatusLabel(state)}</span>
+      </div>
+      {showSourcePicker &&
+        <button type="button" className="media-sources-button" aria-expanded={sourcesOpen}
+          aria-controls="media-source-options" onClick={() => setSourcesOpen((open) => !open)}>
+          Источники ({sources.length})
+        </button>}
+      {showSourcePicker && sourcesOpen &&
+        <div id="media-source-options" className="media-source-options" role="group" aria-label="Источники OBS">
+          {selectedIsOffline &&
+            <div className="media-source-offline">Выбранный источник недоступен</div>}
+          {sources.map((source, index) => (
+            <button type="button" key={source.connectionId}
+              className={source.connectionId === selectedConnectionId ? "active" : ""}
+              aria-pressed={source.connectionId === selectedConnectionId}
+              onClick={() => { onSourceChange(source.connectionId); setSourcesOpen(false); }}>
+              <span>Источник {index + 1}</span>
+              <span>{getPlaybackStatusLabel(source.state ?? (source.playing ? "PLAYING" : "PAUSED"))}</span>
+            </button>
+          ))}
+        </div>}
+      <details className="media-playback-details">
+        <summary>Подробности</summary>
+        <div>OBS: {selectedConnectionId || "нет данных"}</div>
+        <div>Состояние: {state}</div>
+        {selectedSource?.errorCode != null &&
+          <div>Код ошибки YouTube: {selectedSource.errorCode}</div>}
+        {selectedSource?.issue &&
+          <div>Диагностика: {selectedSource.issue}</div>}
+      </details>
     </div>
   );
 }
