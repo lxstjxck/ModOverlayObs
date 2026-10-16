@@ -149,7 +149,7 @@ export function buildContentSecurityPolicy(): string {
     "frame-ancestors 'self'",
     "frame-src 'self' https://www.youtube.com",
     "form-action 'self'",
-    "script-src 'self'",
+    "script-src 'self' https://www.youtube.com",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data: blob:",
     "media-src 'self' https: blob:",

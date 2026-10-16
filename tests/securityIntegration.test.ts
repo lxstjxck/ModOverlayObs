@@ -2682,8 +2682,10 @@ describe("OBS playback telemetry", () => {
       obs.emit("media:status", { elementId: video.id, connectionId: obs.id,
         position, duration: 90, playing: true, commandId });
     const first = event<{ position: number; connectionId: string }>(editor, "media:status");
-    report(obs1, 12);
-    expect(await first).toMatchObject({ position: 12, connectionId: obs1.id });
+    obs1.emit("media:status", { elementId: video.id, connectionId: obs1.id,
+      position: 12, duration: 90, playing: true, commandId: null,
+      player: "youtube", state: "PLAYING", errorCode: null });
+    expect(await first).toMatchObject({ position: 12, connectionId: obs1.id, player: "youtube", state: "PLAYING" });
     const second = event<{ position: number; connectionId: string }>(editor, "media:status");
     report(obs2, 47);
     expect(await second).toMatchObject({ position: 47, connectionId: obs2.id });

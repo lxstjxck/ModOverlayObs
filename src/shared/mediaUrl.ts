@@ -170,6 +170,7 @@ export function buildYouTubeEmbedUrl(
   url.searchParams.set("playsinline", "1");
   url.searchParams.set("rel", "0");
   url.searchParams.set("modestbranding", "1");
+  url.searchParams.set("playlist", id);
   if (options.origin) {
     url.searchParams.set("origin", options.origin);
   }
@@ -181,7 +182,6 @@ export function buildYouTubeEmbedUrl(
   }
   if (options.loop) {
     url.searchParams.set("loop", "1");
-    url.searchParams.set("playlist", id);
   }
   return url.toString();
 }

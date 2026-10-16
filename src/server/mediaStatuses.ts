@@ -13,6 +13,7 @@ export class MediaStatuses {
     const previous = statuses.get(input.elementId);
     if (now - (times.get(input.elementId) ?? -Infinity) < 500 &&
         previous?.commandId === input.commandId && previous?.playing === input.playing &&
+        previous?.state === input.state && previous?.errorCode === input.errorCode && previous?.issue === input.issue &&
         Math.abs(previous.position - input.position) < 1) return null;
     if (!statuses.has(input.elementId) && statuses.size >= 100) return null;
     const status = { ...input, observedAt: now };

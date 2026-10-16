@@ -36,7 +36,7 @@ describe("security primitives", () => {
     const directives = buildContentSecurityPolicy();
     expect(directives).toContain("frame-src 'self' https://www.youtube.com");
     expect(directives).toContain("media-src 'self' https: blob:");
-    expect(directives).toContain("script-src 'self'");
+    expect(directives).toContain("script-src 'self' https://www.youtube.com");
     expect(directives).not.toContain("media-src 'self' https: http:");
   });
 });

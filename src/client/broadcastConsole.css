@@ -788,6 +788,31 @@
   gap: 12px;
 }
 
+.moderator-app .media-playback-status {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 32px;
+  overflow: hidden;
+  color: #c6c0d0;
+  font-size: 13px;
+}
+
+.moderator-app .media-playback-status-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.moderator-app .media-playback-status select {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+}
+
 .moderator-app .media-transport {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -809,6 +834,7 @@
 .moderator-app .media-timeline-times {
   display: flex;
   justify-content: space-between;
+  white-space: nowrap;
   color: #a0a0a6;
   font-size: 13px;
   font-variant-numeric: tabular-nums;

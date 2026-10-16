@@ -9,9 +9,9 @@ import {
 import { EyeOff } from "lucide-react";
 import { buildYouTubeEmbedUrl, isRenderableMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 import type { OverlayElement, StreamerView } from "../../shared/types";
-import { setMediaNodeMuted, setMediaNodeVolume } from "../mediaPlayback";
 import { cropClipPath, getCrop, scaleCrop } from "../cropGeometry";
 import { sortElements } from "../utils";
+import { YouTubePlayerController } from "../youtubePlayer";
 
 interface CanvasStageProps {
   mode: "workspace" | "overlay";
@@ -863,23 +863,7 @@ function ElementContent({
     });
     if (youtubeSrc) {
       return (
-        <iframe
-          className="media-element video-frame"
-          style={buildCropStyle(element)}
-          data-preview-media-id={mode === "workspace" ? element.id : undefined}
-          data-overlay-media-id={mode === "overlay" ? element.id : undefined}
-          src={youtubeSrc}
-          referrerPolicy="no-referrer"
-          title={element.name}
-          allow="autoplay; encrypted-media; picture-in-picture"
-          allowFullScreen
-          onLoad={(event) => {
-            if (mode === "overlay") {
-              setMediaNodeVolume(event.currentTarget, element.liveVolume);
-              setMediaNodeMuted(event.currentTarget, element.muted);
-            }
-          }}
-        />
+        <YouTubeMedia key={youtubeSrc} element={element} mode={mode} src={youtubeSrc} />
       );
     }
   }
@@ -926,6 +910,55 @@ function ElementContent({
   }
 
   return <RetryImage key={element.src ?? ""} element={element} />;
+}
+
+function YouTubeMedia({ element, mode, src }: {
+  element: OverlayElement;
+  mode: CanvasStageProps["mode"];
+  src: string;
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const controllerRef = useRef<YouTubePlayerController | null>(null);
+  const disposeTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return undefined;
+    if (disposeTimerRef.current !== null) {
+      window.clearTimeout(disposeTimerRef.current);
+      disposeTimerRef.current = null;
+    }
+    if (!controllerRef.current) {
+      controllerRef.current = new YouTubePlayerController(frame, () => frame.dispatchEvent(new Event("youtube:status")));
+    }
+    return () => {
+      disposeTimerRef.current = window.setTimeout(() => {
+        controllerRef.current?.dispose();
+        controllerRef.current = null;
+        disposeTimerRef.current = null;
+      }, 0);
+    };
+  }, [src]);
+  useEffect(() => {
+    controllerRef.current?.configure(
+      mode === "overlay" ? element.liveVolume : element.previewVolume ?? 1,
+      mode === "overlay" ? element.muted : false,
+      element.loop
+    );
+  }, [element.liveVolume, element.previewVolume, element.muted, element.loop, mode]);
+  return (
+    <iframe
+      ref={frameRef}
+      className="media-element video-frame"
+      style={buildCropStyle(element)}
+      data-preview-media-id={mode === "workspace" ? element.id : undefined}
+      data-overlay-media-id={mode === "overlay" ? element.id : undefined}
+      src={src}
+      referrerPolicy="strict-origin-when-cross-origin"
+      title={element.name}
+      allow="autoplay; encrypted-media; picture-in-picture"
+      allowFullScreen
+    />
+  );
 }
 
 function RetryImage({ element }: { element: OverlayElement }) {

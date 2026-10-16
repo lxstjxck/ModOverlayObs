@@ -45,7 +45,7 @@ export function PropertiesPanel({
       setMediaElement(isPlayableNode(node) ? node : null);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [selected?.id, selected?.type]);
+  }, [selected?.id, selected?.type, selected?.src]);
 
   useEffect(() => {
     if (mediaElement instanceof HTMLIFrameElement) {
@@ -248,6 +248,7 @@ function MediaControls({
   const positionInputRef = useRef<HTMLInputElement>(null);
   const committedPositionRef = useRef(false);
   const [sourceId, setSourceId] = useState("");
+  const [waitingCommandId, setWaitingCommandId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 2000);
@@ -256,11 +257,27 @@ function MediaControls({
   const sources = statuses.filter((status) => now - status.observedAt < 5000)
     .sort((a, b) => a.connectionId.localeCompare(b.connectionId));
   const selectedStatus = sources.find((item) => item.connectionId === sourceId) ?? sources[0];
+  const commandId = typeof selected.props.playbackCommandId === "string"
+    ? selected.props.playbackCommandId : null;
+  const awaitingConfirmation = Boolean(selectedStatus && commandId && selectedStatus.commandId !== commandId);
+  useEffect(() => {
+    setWaitingCommandId(null);
+    if (!awaitingConfirmation || !commandId) return undefined;
+    const timer = window.setTimeout(() => setWaitingCommandId(commandId), 400);
+    return () => window.clearTimeout(timer);
+  }, [awaitingConfirmation, commandId, selectedStatus?.connectionId]);
   const youtubePreview = mediaElement instanceof HTMLIFrameElement;
+  const hasTime = Boolean(selectedStatus || youtubePreview);
   const videoTime = selectedStatus
     ? { current: selectedStatus.position, duration: selectedStatus.duration }
     : youtubePreview ? previewTime : { current: 0, duration: 0 };
-  const showHours = videoTime.duration >= 3600;
+  const showHours = videoTime.duration >= 3600 || videoTime.current >= 3600;
+  const playbackState = getPlaybackDisplayState(
+    selectedStatus, selected.props, awaitingConfirmation && waitingCommandId === commandId
+  );
+  const statusLabel = selectedStatus
+    ? `OBS ${selectedStatus.connectionId.slice(0, 8)} · ${playbackState}${selectedStatus.errorCode ? ` (${selectedStatus.errorCode})` : selectedStatus.issue ? ` (${selectedStatus.issue.replaceAll("_", " ").toLowerCase()})` : ""}`
+    : youtubePreview ? "OBS OFFLINE · YouTube preview time" : "OBS OFFLINE · no telemetry";
 
   useEffect(() => {
     setPositionText("");
@@ -352,16 +369,12 @@ function MediaControls({
 
   return (
     <div className="video-controls">
-      <div className="field">
-        <span>{selectedStatus ? `OBS ${selectedStatus.connectionId.slice(0, 8)} · ${selectedStatus.playing ? "PLAYING" : "PAUSED"}` : youtubePreview ? "OBS OFFLINE · YouTube preview time" : "OBS OFFLINE · no telemetry"}</span>
-        {sources.length > 1 && (
-          <select aria-label="OBS source" value={selectedStatus.connectionId} onChange={(event) => setSourceId(event.target.value)}>
-            {sources.map((source) => <option key={source.connectionId} value={source.connectionId}>OBS {source.connectionId.slice(0, 8)}</option>)}
-          </select>
-        )}
-        {selectedStatus && typeof selected.props.playbackCommandId === "string" &&
-          selectedStatus.commandId !== selected.props.playbackCommandId && <span>Awaiting OBS confirmation</span>}
-      </div>
+      <PlaybackStatusRow
+        label={statusLabel}
+        sources={sources}
+        selectedConnectionId={selectedStatus?.connectionId ?? ""}
+        onSourceChange={setSourceId}
+      />
       <div className="mini-toolbar media-transport">
         <button
           type="button"
@@ -391,13 +404,12 @@ function MediaControls({
           <RotateCcw size={19} />
         </button>
       </div>
-      {mediaElement && (selectedStatus || youtubePreview) && (
-        <div className="media-timeline">
+      <div className="media-timeline">
           <div className="media-timeline-times">
             <span>
-              {formatMediaPosition(scrubbing ? scrubSeconds : videoTime.current, showHours)}
+              {hasTime ? formatMediaPosition(scrubbing ? scrubSeconds : videoTime.current, showHours) : "--:--"}
             </span>
-            <span>{formatMediaPosition(videoTime.duration, showHours)}</span>
+            <span>{hasTime && videoTime.duration > 0 ? formatMediaPosition(videoTime.duration, showHours) : "--:--"}</span>
           </div>
           <input
             type="range"
@@ -405,7 +417,7 @@ function MediaControls({
             min={0}
             max={videoTime.duration || 1}
             step={0.01}
-            disabled={videoTime.duration <= 0}
+            disabled={!hasTime || videoTime.duration <= 0}
             value={Math.min(scrubbing ? scrubSeconds : videoTime.current, videoTime.duration || 1)}
             onChange={(event) => previewScrub(Number(event.target.value))}
             onPointerUp={commitScrub}
@@ -429,8 +441,7 @@ function MediaControls({
             }}
             onBlur={commitScrub}
           />
-        </div>
-      )}
+      </div>
       <form
         className="media-position-row"
         onSubmit={(event) => {
@@ -444,6 +455,7 @@ function MediaControls({
             ref={positionInputRef}
             type="text"
             inputMode="numeric"
+            disabled={selectedStatus?.player === "youtube" && videoTime.duration <= 0}
             placeholder={selectedStatus || youtubePreview ? showHours ? "00:00:00" : "00:00" : "OFFLINE"}
             value={positionText}
             aria-invalid={Boolean(positionError)}
@@ -523,6 +535,52 @@ function MediaControls({
           Loop
         </label>
       </div>
+    </div>
+  );
+}
+
+export function getPlaybackDisplayState(
+  status: MediaStatus | undefined,
+  props: OverlayElement["props"],
+  showWaiting: boolean
+): "PLAYING" | "PAUSED" | "STOPPED" | "WAITING" | "OFFLINE" | "BUFFERING" | "ENDED" | "UNSTARTED" | "ERROR" | "UNKNOWN" {
+  if (!status) return "OFFLINE";
+  if (status.state === "ERROR") return "ERROR";
+  if (showWaiting) return "WAITING";
+  if (props.playbackCommand === "stop" && props.playbackCommandId === status.commandId &&
+      status.position <= 0.25) return "STOPPED";
+  if (status.state && status.state !== "UNKNOWN") return status.state;
+  if (status.playing) return "PLAYING";
+  return "PAUSED";
+}
+
+export function PlaybackStatusRow({
+  label,
+  sources,
+  selectedConnectionId,
+  onSourceChange
+}: {
+  label: string;
+  sources: MediaStatus[];
+  selectedConnectionId: string;
+  onSourceChange: (id: string) => void;
+}) {
+  return (
+    <div className="media-playback-status" role="status" aria-live="polite">
+      <span className="media-playback-status-label">{label}</span>
+      <select
+        aria-label="OBS source"
+        value={selectedConnectionId}
+        disabled={sources.length < 2}
+        onChange={(event) => onSourceChange(event.target.value)}
+      >
+        <option value="">No OBS</option>
+        {sources.map((source) => (
+          <option key={source.connectionId} value={source.connectionId}>
+            OBS {source.connectionId.slice(0, 8)}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

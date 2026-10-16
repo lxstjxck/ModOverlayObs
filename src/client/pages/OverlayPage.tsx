@@ -14,11 +14,13 @@ import {
   pauseMediaNode,
   playMediaNode,
   restartMediaNode,
+  runYouTubeCommand,
   setMediaNodeMuted,
   setMediaNodeVolume,
   stopMediaNode,
   type PlayableNode
 } from "../mediaPlayback";
+import { youtubeController } from "../youtubePlayer";
 
 const defaultStreamer: StreamerView = {
   id: "overlay",
@@ -34,6 +36,7 @@ export function OverlayPage({ token }: { token: string }) {
   const streamerRef = useRef<StreamerView>(defaultStreamer);
   const socketRef = useRef<Socket | null>(null);
   const appliedCommandKeys = useRef(new Map<string, string>());
+  const sourceKeys = useRef(new Map<string, string | null>());
   const canonicalCanvas = useRef<OverlayElement[]>([]);
   const onAirRef = useRef<OverlayElement[]>([]);
   const lastStatusSent = useRef(new Map<string, number>());
@@ -41,17 +44,23 @@ export function OverlayPage({ token }: { token: string }) {
   const reportStatus = (id: string, force = false) => {
     const socket = socketRef.current;
     const media = getPlayableMedia(id);
-    if (!socket?.connected || !(media instanceof HTMLMediaElement)) return;
+    if (!socket?.connected || !media) return;
     const now = Date.now();
     if (!force && now - (lastStatusSent.current.get(id) ?? 0) < 1000) return;
     lastStatusSent.current.set(id, now);
-    socket.emit("media:status", {
-      elementId: id,
-      connectionId: socket.id,
+    const details = media instanceof HTMLMediaElement ? {
       position: Number.isFinite(media.currentTime) ? Math.min(86400, Math.max(0, media.currentTime)) : 0,
       duration: Number.isFinite(media.duration) ? Math.min(86400, Math.max(0, media.duration)) : 0,
       playing: !media.paused && !media.ended,
+      state: media.ended ? "ENDED" : media.readyState < 3 && !media.paused ? "BUFFERING" : media.paused ? "PAUSED" : "PLAYING",
+      player: "html5",
       commandId: appliedCommandKeys.current.get(id) ?? null
+    } : youtubeController(media)?.status();
+    if (!details) return;
+    socket.emit("media:status", {
+      elementId: id,
+      connectionId: socket.id,
+      ...details
     });
   };
 
@@ -82,6 +91,7 @@ export function OverlayPage({ token }: { token: string }) {
       setCanvas([]);
       canonicalCanvas.current = [];
       appliedCommandKeys.current.clear();
+      sourceKeys.current.clear();
       lastStatusSent.current.clear();
       setStreamer(defaultStreamer);
       streamerRef.current = defaultStreamer;
@@ -107,6 +117,7 @@ export function OverlayPage({ token }: { token: string }) {
       canonicalCanvas.current = state;
       const ids = new Set(state.map((element) => element.id));
       for (const id of appliedCommandKeys.current.keys()) if (!ids.has(id)) appliedCommandKeys.current.delete(id);
+      for (const id of sourceKeys.current.keys()) if (!ids.has(id)) sourceKeys.current.delete(id);
       for (const id of lastStatusSent.current.keys()) if (!ids.has(id)) lastStatusSent.current.delete(id);
       setCanvas(state);
       window.setTimeout(() => {
@@ -156,11 +167,13 @@ export function OverlayPage({ token }: { token: string }) {
     );
     socket.on("overlay:remove", ({ id }: { id: string }) => {
       appliedCommandKeys.current.delete(id);
+      sourceKeys.current.delete(id);
       lastStatusSent.current.delete(id);
       setCanvas((items) => items.filter((item) => item.id !== id));
     });
     socket.on("overlay:clear", () => {
       appliedCommandKeys.current.clear();
+      sourceKeys.current.clear();
       lastStatusSent.current.clear();
       setCanvas([]);
     });
@@ -169,8 +182,10 @@ export function OverlayPage({ token }: { token: string }) {
         if (commandId && appliedCommandKeys.current.get(id) === commandId) return;
         const media = getPlayableMedia(id);
         if (!media) return;
+        if (media instanceof HTMLIFrameElement && commandId) {
+          if (!runYouTubeCommand(media, command, commandId)) return;
+        } else runPlaybackCommand(command, media);
         if (commandId) appliedCommandKeys.current.set(id, commandId);
-        runPlaybackCommand(command, media);
         window.setTimeout(() => reportStatus(id, true), 100);
       });
     }
@@ -237,10 +252,14 @@ export function OverlayPage({ token }: { token: string }) {
       }
       const media = getPlayableMedia(element.id);
       if (media) {
+        if (sourceKeys.current.has(element.id) && sourceKeys.current.get(element.id) !== (element.src ?? null)) {
+          appliedCommandKeys.current.delete(element.id);
+        }
+        sourceKeys.current.set(element.id, element.src ?? null);
         setMediaNodeVolume(media, element.liveVolume);
         setMediaNodeMuted(media, element.muted);
         applyPlaybackCommand(element, media, appliedCommandKeys.current);
-        reportStatus(element.id, true);
+        reportStatus(element.id);
       }
     }
   }, [onAirElements]);
@@ -249,8 +268,13 @@ export function OverlayPage({ token }: { token: string }) {
     const disposers: Array<() => void> = [];
     for (const element of onAirElements) {
       const media = getPlayableMedia(element.id);
-      if (!(media instanceof HTMLMediaElement)) continue;
       const report = () => reportStatus(element.id, true);
+      if (media instanceof HTMLIFrameElement) {
+        media.addEventListener("youtube:status", report);
+        disposers.push(() => media.removeEventListener("youtube:status", report));
+        continue;
+      }
+      if (!(media instanceof HTMLMediaElement)) continue;
       const tick = () => reportStatus(element.id);
       for (const name of ["play", "pause", "seeked", "loadedmetadata", "durationchange", "ended"]) {
         media.addEventListener(name, report);
@@ -260,7 +284,9 @@ export function OverlayPage({ token }: { token: string }) {
       disposers.push(() => media.removeEventListener("timeupdate", tick));
     }
     const timer = window.setInterval(() => {
-      for (const element of onAirRef.current) reportStatus(element.id);
+      for (const element of onAirRef.current) {
+        if (getPlayableMedia(element.id) instanceof HTMLMediaElement) reportStatus(element.id);
+      }
     }, 1000);
     return () => {
       disposers.forEach((dispose) => dispose());
@@ -305,6 +331,12 @@ export function applyPlaybackCommand(
   }
   const key = String(commandId);
   if (applied.get(element.id) === key) {
+    return;
+  }
+  if (typeof HTMLIFrameElement !== "undefined" && media instanceof HTMLIFrameElement) {
+    if (runYouTubeCommand(media, command, key, command === "seek" ? element.props.seekSeconds as number : undefined)) {
+      applied.set(element.id, key);
+    }
     return;
   }
   applied.set(element.id, key);

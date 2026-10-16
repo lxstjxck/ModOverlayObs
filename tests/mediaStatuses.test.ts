@@ -23,11 +23,17 @@ describe("ephemeral OBS telemetry", () => {
     expect(statuses.update("channel", "obs", status("obs", 42, "seek-1"), 1100)?.position).toBe(42);
     expect(statuses.update("other", "obs", status("forged", 42), 1200)).toBeNull();
     expect(statuses.snapshot("other")).toEqual([]);
+    const buffering = { ...status("obs", 42, "seek-1"), player: "youtube" as const, state: "BUFFERING" as const, errorCode: null };
+    expect(statuses.update("channel", "obs", buffering, 1200)?.state).toBe("BUFFERING");
+    expect(statuses.update("channel", "obs", { ...buffering, state: "PLAYING" }, 1300)?.state).toBe("PLAYING");
   });
 
   it("rejects malformed and excessive telemetry", () => {
     expect(mediaStatusInputSchema.safeParse({ ...status("obs", Infinity) }).success).toBe(false);
     expect(mediaStatusInputSchema.safeParse({ ...status("obs", 1), streamerId: "other" }).success).toBe(false);
+    expect(mediaStatusInputSchema.safeParse({ ...status("obs", 1), player: "youtube", state: "ERROR", errorCode: 153 }).success).toBe(true);
+    expect(mediaStatusInputSchema.safeParse({ ...status("obs", 1), player: "youtube", state: "ERROR", issue: "AUTOPLAY_BLOCKED" }).success).toBe(true);
+    expect(mediaStatusInputSchema.safeParse({ ...status("obs", 1), player: "youtube", state: "ERROR", errorCode: 999 }).success).toBe(false);
     const statuses = new MediaStatuses();
     for (let index = 0; index < 100; index += 1) {
       expect(statuses.update("channel", "obs", { ...status("obs", index), elementId: `video-${index}` }, 1000)).not.toBeNull();
