@@ -46,6 +46,7 @@ vi.mock("../src/server/config", () => ({
     maxVideoSize: 1024,
     maxAudioSize: 1024,
     maxTotalUploadSize: 10240,
+    minFreeDiskBytes: 512 * 1024 * 1024,
     originAllowlist: [],
     initialAdminUsername: "owner",
     initialAdminPassword: "",
@@ -269,11 +270,17 @@ beforeAll(async () => {
   // Return deterministic responses for Multer limits/errors in these tests.
   app.use(
     (
-      _error: unknown,
+      error: unknown,
       _request: express.Request,
       response: express.Response,
       _next: express.NextFunction
     ) => {
+      const rangeError = error as { status?: number; headers?: Record<string, string> };
+      if (rangeError.status === 416) {
+        for (const [name, value] of Object.entries(rangeError.headers ?? {})) response.setHeader(name, value);
+        response.status(416).end();
+        return;
+      }
       response.status(400).json({ error: "Request failed" });
     }
   );
@@ -2453,6 +2460,9 @@ describe("protected uploads", () => {
     const partial = await fetch(url, { headers: { Range: "bytes=0-7" } });
     expect(partial.status).toBe(206);
     expect(Buffer.from(await partial.arrayBuffer())).toEqual(png.subarray(0, 8));
+    const unsatisfiable = await fetch(url, { headers: { Range: `bytes=${png.length}-` } });
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${png.length}`);
     expect((await fetch(url, { method: "HEAD" })).status).toBe(200);
     const { sessionToken } = await bindTestTwitchOwner();
     await fetch(`${baseUrl}/api/obs/regenerate`, { method: "POST",
@@ -2462,6 +2472,75 @@ describe("protected uploads", () => {
     expect((await fetch(baseUrl + media.url, { headers: headers("mod-session") })).status).toBe(
       401
     );
+  });
+
+  it("streams protected 10, 50 and 100 MiB media with bounded Range responses", async () => {
+    const filename = "range-fixture.mp4";
+    const filePath = path.join(config.uploadDir, filename);
+    const file = await fs.open(filePath, "w+");
+    const media = await prisma.media.create({ data: {
+      streamerId, filename, originalName: filename, mimeType: "video/mp4",
+      type: "VIDEO", size: 0, url: `/uploads/${filename}`
+    } });
+    try {
+      for (const mebibytes of [10, 50, 100]) {
+        const size = mebibytes * 1024 * 1024;
+        await file.truncate(size);
+        await file.write(Buffer.from("000000186674797069736f6d", "hex"), 0, 12, 0);
+        await prisma.media.update({ where: { id: media.id }, data: { size } });
+        const url = `${baseUrl}${media.url}?overlayToken=overlay-old`;
+        const head = await fetch(url, { method: "HEAD" });
+        expect(head.status).toBe(200);
+        expect(head.headers.get("content-length")).toBe(String(size));
+        for (const offset of [0, Math.floor(size / 2), size - 1]) {
+          const result = await fetch(url, { headers: { Range: `bytes=${offset}-${offset}` } });
+          expect(result.status).toBe(206);
+          expect(result.headers.get("content-range")).toBe(`bytes ${offset}-${offset}/${size}`);
+          expect((await result.arrayBuffer()).byteLength).toBe(1);
+        }
+        const invalid = await fetch(url, { headers: { Range: `bytes=${size}-` } });
+        expect(invalid.status).toBe(416);
+        expect(invalid.headers.get("content-range")).toBe(`bytes */${size}`);
+      }
+    } finally {
+      await file.close();
+      await prisma.media.delete({ where: { id: media.id } });
+      await fs.unlink(filePath);
+    }
+  });
+
+  it("rejects a large upload before writing when the disk reserve is unavailable", async () => {
+    const reserve = config.minFreeDiskBytes;
+    config.minFreeDiskBytes = Number.MAX_SAFE_INTEGER;
+    const address = new URL(baseUrl);
+    const socket = net.createConnection(Number(address.port), address.hostname);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+      const auth = headers();
+      const response = new Promise<string>((resolve, reject) => {
+        socket.once("data", (bytes) => resolve(bytes.toString()));
+        socket.once("error", reject);
+      });
+      socket.write([
+        "POST /api/media HTTP/1.1",
+        `Host: ${address.host}`,
+        "Content-Type: multipart/form-data; boundary=large-upload",
+        `Content-Length: ${11 * 1024 * 1024}`,
+        `Cookie: ${auth.Cookie}`,
+        `x-csrf-token: ${auth["x-csrf-token"]}`,
+        `x-channel-id: ${auth["x-channel-id"]}`,
+        "Connection: close", "", ""
+      ].join("\r\n"));
+      expect(await response).toContain(" 507 ");
+      expect(await fs.readdir(path.join(config.uploadDir, ".tmp"))).toEqual([]);
+      expect(await prisma.media.count()).toBe(0);
+    } finally {
+      config.minFreeDiskBytes = reserve;
+      socket.destroy();
+    }
   });
 
   it("does not authorize another streamer's files or unregistered disk files", async () => {

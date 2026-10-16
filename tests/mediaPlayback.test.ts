@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeYouTubeTime, seekMediaNode } from "../src/client/mediaPlayback";
+import { observeYouTubeTime, playMediaNode, restartMediaNode, seekMediaNode } from "../src/client/mediaPlayback";
 
 class Media {
   currentTime = 0;
@@ -11,6 +11,21 @@ afterEach(() => {
 });
 
 describe("media seeking", () => {
+  it("handles rejected browser play promises without exposing media URLs", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    class RejectingMedia extends Media {
+      play() { return Promise.reject(new Error("https://example.test/secret?overlayToken=private")); }
+    }
+    vi.stubGlobal("HTMLMediaElement", RejectingMedia);
+    const node = new RejectingMedia() as HTMLMediaElement;
+    playMediaNode(node);
+    restartMediaNode(node);
+    await Promise.resolve();
+    expect(warning).toHaveBeenCalledTimes(2);
+    expect(warning).toHaveBeenCalledWith("Media playback failed");
+    warning.mockRestore();
+  });
+
   it("seeks files and ignores invalid times", () => {
     vi.stubGlobal("HTMLMediaElement", Media);
     const node = new Media();

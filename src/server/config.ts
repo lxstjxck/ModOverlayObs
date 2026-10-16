@@ -78,6 +78,7 @@ export const config = {
   maxVideoSize: numberEnv("MAX_VIDEO_SIZE", 100 * 1024 * 1024),
   maxAudioSize: numberEnv("MAX_AUDIO_SIZE", 50 * 1024 * 1024),
   maxTotalUploadSize: numberEnv("MAX_TOTAL_UPLOAD_SIZE", 5 * 1024 * 1024 * 1024),
+  minFreeDiskBytes: Math.max(64 * 1024 * 1024, numberEnv("MIN_FREE_DISK_BYTES", 512 * 1024 * 1024)),
   originAllowlist: buildAllowedOrigins(domain, publicOrigin, port),
   initialAdminUsername: process.env.INITIAL_ADMIN_USERNAME ?? "owner",
   initialAdminPassword: process.env.INITIAL_ADMIN_PASSWORD ?? "",

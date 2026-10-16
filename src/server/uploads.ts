@@ -25,6 +25,7 @@ const maxCleanupFiles = 100;
 const activeTemporaryNames = new Set<string>();
 const requestTemporaryNames = new WeakMap<Request, string>();
 let pendingCommit: Promise<unknown> = Promise.resolve();
+let reservedUploadBytes = 0;
 
 // Avoid SQLite lock contention within this process. The DB transaction remains
 // responsible for enforcing the quota atomically.
@@ -56,8 +57,11 @@ export const uploadMiddleware: { single: (field: string) => RequestHandler } = {
     return (request, response, next) => {
       let middlewareDone = false;
       let responseDone = false;
+      let reservation = 0;
       const release = () => {
         if (!middlewareDone || !responseDone) return;
+        reservedUploadBytes -= reservation;
+        reservation = 0;
         response.off("finish", responseEnded);
         response.off("close", responseEnded);
         const name = requestTemporaryNames.get(request);
@@ -72,14 +76,44 @@ export const uploadMiddleware: { single: (field: string) => RequestHandler } = {
       };
       response.once("finish", responseEnded);
       response.once("close", responseEnded);
-      middleware(request, response, (error) => {
-        middlewareDone = true;
-        release();
-        next(error);
-      });
+      void (async () => {
+        try {
+          reservation = await reserveUploadSpace(request);
+          if (responseDone || (request.destroyed && !request.complete)) {
+            middlewareDone = true;
+            release();
+            return;
+          }
+          middleware(request, response, (error) => {
+            middlewareDone = true;
+            release();
+            next(error);
+          });
+        } catch {
+          middlewareDone = true;
+          release();
+          if (!responseDone) response.status(507).json({ error: "Insufficient free disk space for upload" });
+        }
+      })();
     };
   }
 };
+
+async function reserveUploadSpace(request: Request): Promise<number> {
+  const header = request.headers["content-length"];
+  const contentLength = typeof header === "string" && /^\d+$/.test(header) ? Number(header) : NaN;
+  if (Number.isFinite(contentLength) && contentLength < 10 * 1024 * 1024) return 0;
+  const expectedBytes = Number.isFinite(contentLength)
+    ? Math.min(contentLength, config.maxVideoSize + 1024 * 1024)
+    : config.maxVideoSize + 1024 * 1024;
+  const disk = await fs.statfs(tmpDir);
+  const availableBytes = disk.bavail * disk.bsize;
+  if (availableBytes - reservedUploadBytes < expectedBytes + config.minFreeDiskBytes) {
+    throw new Error("Insufficient free disk space");
+  }
+  reservedUploadBytes += expectedBytes;
+  return expectedBytes;
+}
 
 // Multer 2.4 handles interrupted requests. This also recovers files left by a
 // process crash, including files created by the former Multer disk storage.

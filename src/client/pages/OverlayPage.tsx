@@ -5,6 +5,10 @@ import { CanvasStage } from "../components/CanvasStage";
 import { cropClipPath, getCrop } from "../cropGeometry";
 import { overlayMediaUrl } from "../overlayMediaUrl";
 import {
+  shouldClearOverlayOnConnectError,
+  shouldClearOverlayOnDisconnect
+} from "../overlayConnection";
+import {
   isPlayableNode,
   seekMediaNode,
   pauseMediaNode,
@@ -67,8 +71,13 @@ export function OverlayPage({ token }: { token: string }) {
       setStreamer(value);
     });
     socket.on("access:revoked", clearCanvas);
-    socket.on("disconnect", clearCanvas);
-    socket.on("connect_error", clearCanvas);
+    socket.on("disconnect", (reason) => {
+      stopTts();
+      if (shouldClearOverlayOnDisconnect(reason)) clearCanvas();
+    });
+    socket.on("connect_error", (error: Error) => {
+      if (shouldClearOverlayOnConnectError(error.message)) clearCanvas();
+    });
     socket.on("overlay:state", (state: OverlayElement[]) => {
       canonicalCanvas.current = state;
       setCanvas(state);

@@ -9,7 +9,7 @@ export function playMediaNode(node: PlayableNode | null): void {
     return;
   }
   if (node instanceof HTMLMediaElement) {
-    void node.play();
+    void node.play().catch(reportPlaybackFailure);
     return;
   }
   sendYouTubeCommand(node, "playVideo");
@@ -32,11 +32,16 @@ export function restartMediaNode(node: PlayableNode | null): void {
   }
   if (node instanceof HTMLMediaElement) {
     node.currentTime = 0;
-    void node.play();
+    void node.play().catch(reportPlaybackFailure);
     return;
   }
   sendYouTubeCommand(node, "seekTo", [0, true]);
   sendYouTubeCommand(node, "playVideo");
+}
+
+function reportPlaybackFailure(): void {
+  // Do not log the media URL: protected uploads include an OBS token.
+  console.warn("Media playback failed");
 }
 
 export function stopMediaNode(node: PlayableNode | null): void {
