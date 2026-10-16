@@ -791,7 +791,7 @@
 .moderator-app .media-playback-status {
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 96px);
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -802,6 +802,7 @@
 }
 
 .moderator-app .media-playback-status-label {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -811,6 +812,12 @@
   width: 100%;
   min-width: 0;
   height: 28px;
+}
+
+.moderator-app .media-preview-notice {
+  color: #e8c682;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .moderator-app .media-transport {
@@ -838,6 +845,15 @@
   color: #a0a0a6;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  line-height: 20px;
+}
+
+.moderator-app .media-timeline-times span {
+  min-width: 5ch;
+}
+
+.moderator-app .media-timeline-times span:last-child {
+  text-align: right;
 }
 
 .moderator-app .media-position-row {

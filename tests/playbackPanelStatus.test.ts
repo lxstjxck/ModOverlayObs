@@ -48,8 +48,8 @@ describe("video control status", () => {
     const row = (label: string) => renderToStaticMarkup(React.createElement(PlaybackStatusRow, {
       label, sources: [status], selectedConnectionId: status.connectionId, onSourceChange: () => {}
     }));
-    const normalize = (html: string) => html.replace(
-      /(<span class="media-playback-status-label">).*?(<\/span>)/, "$1STATUS$2"
+    const normalize = (html: string) => html.replace(/title="[^"]*"/, 'title="STATUS"').replace(
+      /(<span class="media-playback-status-label"[^>]*>).*?(<\/span>)/, "$1STATUS$2"
     );
     for (const state of ["PLAYING", "PAUSED", "STOPPED", "WAITING", "OFFLINE"]) {
       expect(normalize(row(`OBS obs-conn · ${state}`))).toBe(normalize(row("OBS obs-conn · PLAYING")));
@@ -68,6 +68,21 @@ describe("video control status", () => {
       expect(html.indexOf('class="media-timeline"')).toBeLessThan(html.indexOf('class="media-position-row"'));
     }
     expect(renderPanel([{ ...status, player: "youtube", duration: 0 }])).toContain("--:--");
+    expect(renderPanel([{ ...status, player: "youtube", duration: 0 }]))
+      .toMatch(/aria-label="Перемотка по таймкоду"[^>]*disabled=""/);
+    const offline = renderToStaticMarkup(React.createElement(PropertiesPanel, {
+      selected: video, mediaStatuses: [], selectedConnectionId: "obs-disconnected",
+      onUpdate: () => {}, onDuplicate: () => {}, onRemove: () => {}
+    }));
+    expect(offline).toContain("OFFLINE");
+    expect(offline).toContain("obs-disconnected");
+    expect(offline).toMatch(/aria-label="OBS source"[^>]*>/);
+    expect(offline).toMatch(/aria-label="Перемотка по таймкоду"[^>]*disabled=""/);
+    const readOnly = renderToStaticMarkup(React.createElement(PropertiesPanel, {
+      selected: video, mediaStatuses: [status], canControlPlayback: false,
+      onUpdate: () => {}, onDuplicate: () => {}, onRemove: () => {}
+    }));
+    expect(readOnly).toMatch(/aria-label="Перемотка по таймкоду"[^>]*disabled=""/);
     const css = readFileSync(new URL("../src/client/broadcastConsole.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.moderator-app \.media-playback-status\s*\{[^}]*height:\s*32px/s);
     expect(css).toMatch(/\.moderator-app \.media-playback-status-label\s*\{[^}]*white-space:\s*nowrap/s);

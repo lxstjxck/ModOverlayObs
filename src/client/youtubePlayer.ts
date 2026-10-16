@@ -1,4 +1,6 @@
 import type { MediaStatusInput } from "../shared/mediaStatus";
+import type { MediaStatus } from "../shared/mediaStatus";
+import { previewSyncActions, previewTargetPosition } from "./previewPlaybackSync";
 
 type PlayerState = NonNullable<MediaStatusInput["state"]>;
 type Command = "play" | "pause" | "stop" | "restart" | "seek";
@@ -101,6 +103,12 @@ export class YouTubePlayerController {
   private durationSample: { value: number; at: number } | null = null;
   private durationConfirmed = false;
   private liveDuration = false;
+  private previewSource: string | null = null;
+  private previewInitialized = false;
+  private previewActionAt = 0;
+  private previewAutoMuted = false;
+  private previewAudioTouched = false;
+  private previewRequestedState: "PLAYING" | "PAUSED" | null = null;
 
   private readonly listeners = new Set<() => void>();
 
@@ -116,7 +124,7 @@ export class YouTubePlayerController {
           try {
             this.player?.setLoop(this.loop);
             this.player?.setVolume(Math.round(this.volume * 100));
-            if (this.muted) this.player?.mute();
+            if (this.muted || this.previewAutoMuted) this.player?.mute();
           } catch {
             this.fail();
             return;
@@ -166,7 +174,7 @@ export class YouTubePlayerController {
       if (this.ready && this.volume !== volume) this.player?.setVolume(Math.round(volume * 100));
       if (this.ready && this.muted !== muted) {
         if (muted) this.player?.mute();
-        else this.player?.unMute();
+        else if (!this.previewAutoMuted) this.player?.unMute();
       }
       if (this.ready && this.loop !== loop) this.player?.setLoop(loop);
     } catch {
@@ -178,7 +186,61 @@ export class YouTubePlayerController {
   }
 
   setVolume(volume: number): void {
+    this.previewAudioTouched = true;
+    if (this.previewAutoMuted) {
+      this.previewAutoMuted = false;
+      try {
+        if (this.ready && !this.muted) this.player?.unMute();
+      } catch { this.fail(); return; }
+    }
     this.configure(volume, this.muted, this.loop);
+  }
+
+  syncPreview(status: MediaStatus): void {
+    if (!this.ready || !this.player || this.disposed || this.issue === "AUTOPLAY_BLOCKED" ||
+        this.issue === "API_UNAVAILABLE") return;
+    if (this.previewSource !== status.connectionId) {
+      this.previewSource = status.connectionId;
+      this.previewInitialized = false;
+      this.previewActionAt = 0;
+      this.previewRequestedState = null;
+    }
+    const now = Date.now();
+    if (now - this.previewActionAt < 2000) return;
+    const local = this.status();
+    if (local.state === status.state) this.previewRequestedState = null;
+    const actions = previewSyncActions(status, { position: local.position, state: local.state ?? "UNKNOWN" },
+      this.previewInitialized, now);
+    const stateAction = this.previewRequestedState === status.state ? null
+      : actions.includes("play") ? "play" : actions.includes("pause") ? "pause" : null;
+    if (status.player === "youtube" && status.state === "PLAYING" &&
+        now - status.observedAt < 5000 && !this.previewAudioTouched && !this.previewAutoMuted) {
+      try {
+        this.player.mute();
+        this.previewAutoMuted = true;
+      } catch {
+        this.fail();
+        return;
+      }
+    }
+    if (!actions.includes("seek") && !stateAction) return;
+    try {
+      if (actions.includes("seek")) {
+        this.player.seekTo(previewTargetPosition(status, now), true);
+        this.previewInitialized = true;
+      }
+      if (stateAction === "play") {
+        this.player.playVideo();
+        this.previewRequestedState = "PLAYING";
+      } else if (stateAction === "pause") {
+        this.player.pauseVideo();
+        this.previewRequestedState = "PAUSED";
+      }
+      this.previewActionAt = now;
+    } catch {
+      this.previewActionAt = now;
+      this.fail();
+    }
   }
 
   setMuted(muted: boolean): void {
@@ -197,6 +259,13 @@ export class YouTubePlayerController {
 
   run(command: Command, id: string | null = null, seconds?: number): void {
     if (this.disposed) return;
+    if (command === "play" || command === "restart") this.previewAudioTouched = true;
+    if ((command === "play" || command === "restart") && this.previewAutoMuted) {
+      this.previewAutoMuted = false;
+      try {
+        if (this.ready && !this.muted) this.player?.unMute();
+      } catch { this.fail(); return; }
+    }
     this.state = "UNKNOWN";
     this.errorCode = null;
     this.issue = null;

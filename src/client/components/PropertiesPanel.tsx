@@ -5,7 +5,6 @@ import type { MediaStatus } from "../../shared/mediaStatus";
 import {
   isPlayableNode,
   seekMediaNode,
-  observeYouTubeTime,
   pauseMediaNode,
   playMediaNode,
   restartMediaNode,
@@ -16,10 +15,14 @@ import {
 import { isPlayableMedia, isText } from "../utils";
 import { formatMediaPosition, parseMediaPosition } from "../mediaPosition";
 import { scaleCrop } from "../cropGeometry";
+import { youtubeController } from "../youtubePlayer";
 
 interface PropertiesPanelProps {
   selected: OverlayElement | null;
   mediaStatuses: MediaStatus[];
+  selectedConnectionId?: string;
+  onSourceChange?: (id: string) => void;
+  canControlPlayback?: boolean;
   onUpdate: (id: string, patch: Partial<OverlayElement>) => void;
   onDuplicate: () => void;
   onRemove: () => void;
@@ -28,12 +31,15 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({
   selected,
   mediaStatuses,
+  selectedConnectionId = "",
+  onSourceChange = () => undefined,
+  canControlPlayback = true,
   onUpdate,
   onDuplicate,
   onRemove
 }: PropertiesPanelProps) {
-  const [videoTime, setVideoTime] = useState({ current: 0, duration: 0 });
   const [mediaElement, setMediaElement] = useState<PlayableNode | null>(null);
+  const [previewIssue, setPreviewIssue] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selected || !isPlayableMedia(selected)) {
@@ -48,12 +54,10 @@ export function PropertiesPanel({
   }, [selected?.id, selected?.type, selected?.src]);
 
   useEffect(() => {
-    if (mediaElement instanceof HTMLIFrameElement) {
-      setVideoTime({ current: 0, duration: 0 });
-      return observeYouTubeTime(mediaElement, setVideoTime);
-    }
-    setVideoTime({ current: 0, duration: 0 });
-    return undefined;
+    setPreviewIssue(null);
+    if (!(mediaElement instanceof HTMLIFrameElement)) return undefined;
+    return youtubeController(mediaElement)?.subscribe(() =>
+      setPreviewIssue(youtubeController(mediaElement)?.status().issue ?? null));
   }, [mediaElement]);
 
   if (!selected) {
@@ -153,9 +157,11 @@ export function PropertiesPanel({
           key={selected.id}
           selected={selected}
           statuses={mediaStatuses}
+          selectedConnectionId={selectedConnectionId}
+          onSourceChange={onSourceChange}
+          canControlPlayback={canControlPlayback}
           mediaElement={mediaElement}
-          previewTime={videoTime}
-          onSeek={(current) => setVideoTime((time) => ({ ...time, current }))}
+          previewIssue={previewIssue}
           update={update}
         />
       )}
@@ -225,16 +231,20 @@ function TextStyleControls({
 function MediaControls({
   selected,
   statuses,
+  selectedConnectionId,
+  onSourceChange,
+  canControlPlayback,
   mediaElement,
-  previewTime,
-  onSeek,
+  previewIssue,
   update
 }: {
   selected: OverlayElement;
   statuses: MediaStatus[];
+  selectedConnectionId: string;
+  onSourceChange: (id: string) => void;
+  canControlPlayback: boolean;
   mediaElement: PlayableNode | null;
-  previewTime: { current: number; duration: number };
-  onSeek: (current: number) => void;
+  previewIssue: string | null;
   update: (patch: Partial<OverlayElement>) => void;
 }) {
   const [positionText, setPositionText] = useState("00:00");
@@ -247,7 +257,6 @@ function MediaControls({
   const positionDraftRef = useRef("00:00");
   const positionInputRef = useRef<HTMLInputElement>(null);
   const committedPositionRef = useRef(false);
-  const [sourceId, setSourceId] = useState("");
   const [waitingCommandId, setWaitingCommandId] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -256,7 +265,8 @@ function MediaControls({
   }, []);
   const sources = statuses.filter((status) => now - status.observedAt < 5000)
     .sort((a, b) => a.connectionId.localeCompare(b.connectionId));
-  const selectedStatus = sources.find((item) => item.connectionId === sourceId) ?? sources[0];
+  const selectedStatus = selectedConnectionId
+    ? sources.find((item) => item.connectionId === selectedConnectionId) : sources[0];
   const commandId = typeof selected.props.playbackCommandId === "string"
     ? selected.props.playbackCommandId : null;
   const awaitingConfirmation = Boolean(selectedStatus && commandId && selectedStatus.commandId !== commandId);
@@ -267,17 +277,23 @@ function MediaControls({
     return () => window.clearTimeout(timer);
   }, [awaitingConfirmation, commandId, selectedStatus?.connectionId]);
   const youtubePreview = mediaElement instanceof HTMLIFrameElement;
-  const hasTime = Boolean(selectedStatus || youtubePreview);
+  const hasTime = Boolean(selectedStatus);
   const videoTime = selectedStatus
     ? { current: selectedStatus.position, duration: selectedStatus.duration }
-    : youtubePreview ? previewTime : { current: 0, duration: 0 };
+    : { current: 0, duration: 0 };
   const showHours = videoTime.duration >= 3600 || videoTime.current >= 3600;
   const playbackState = getPlaybackDisplayState(
     selectedStatus, selected.props, awaitingConfirmation && waitingCommandId === commandId
   );
+  const statusDetail = selectedStatus?.errorCode ? ` (${selectedStatus.errorCode})`
+    : selectedStatus?.issue ? ` (${selectedStatus.issue.replaceAll("_", " ").toLowerCase()})` : "";
   const statusLabel = selectedStatus
-    ? `OBS ${selectedStatus.connectionId.slice(0, 8)} · ${playbackState}${selectedStatus.errorCode ? ` (${selectedStatus.errorCode})` : selectedStatus.issue ? ` (${selectedStatus.issue.replaceAll("_", " ").toLowerCase()})` : ""}`
-    : youtubePreview ? "OBS OFFLINE · YouTube preview time" : "OBS OFFLINE · no telemetry";
+    ? `OBS ${selectedStatus.connectionId.slice(0, 4)} · ${playbackState}${statusDetail}`
+    : selectedConnectionId ? `OBS ${selectedConnectionId.slice(0, 4)} · OFFLINE`
+      : youtubePreview ? "OBS OFFLINE · preview unsynced" : "OBS OFFLINE · no telemetry";
+  const statusTitle = selectedStatus
+    ? `OBS ${selectedStatus.connectionId} · ${playbackState}${statusDetail}`
+    : selectedConnectionId ? `OBS ${selectedConnectionId} · OFFLINE` : statusLabel;
 
   useEffect(() => {
     setPositionText("");
@@ -291,16 +307,16 @@ function MediaControls({
 
   useEffect(() => {
     if (!editingPosition && !positionError)
-      setPositionText(selectedStatus || youtubePreview ? formatMediaPosition(videoTime.current, showHours) : "");
-  }, [editingPosition, positionError, videoTime.current, showHours, selectedStatus, youtubePreview]);
+      setPositionText(selectedStatus ? formatMediaPosition(videoTime.current, showHours) : "");
+  }, [editingPosition, positionError, videoTime.current, showHours, selectedStatus]);
 
   function seek(seconds: number) {
+    if (!canControlPlayback || !selectedStatus || videoTime.duration <= 0) return;
     const bounded = Math.min(
       86400,
       Math.max(0, videoTime.duration > 0 ? Math.min(seconds, videoTime.duration) : seconds)
     );
     seekMediaNode(mediaElement, bounded);
-    onSeek(bounded);
     update({
       props: {
         ...selected.props,
@@ -342,13 +358,14 @@ function MediaControls({
   }
 
   function cancelPosition() {
-    const current = selectedStatus || youtubePreview ? formatMediaPosition(videoTime.current, showHours) : "";
+    const current = selectedStatus ? formatMediaPosition(videoTime.current, showHours) : "";
     positionDraftRef.current = current;
     setPositionText(current);
     setPositionError("");
     setEditingPosition(false);
   }
   function runCommand(command: "play" | "pause" | "stop" | "restart") {
+    if (!canControlPlayback) return;
     if (command === "play") {
       playMediaNode(mediaElement);
     } else if (command === "pause") {
@@ -371,26 +388,32 @@ function MediaControls({
     <div className="video-controls">
       <PlaybackStatusRow
         label={statusLabel}
+        title={statusTitle}
         sources={sources}
-        selectedConnectionId={selectedStatus?.connectionId ?? ""}
-        onSourceChange={setSourceId}
+        selectedConnectionId={selectedConnectionId || selectedStatus?.connectionId || ""}
+        onSourceChange={onSourceChange}
       />
+      {previewIssue === "AUTOPLAY_BLOCKED" &&
+        <div className="media-preview-notice" role="status">Preview autoplay blocked. Press Play to start.</div>}
       <div className="mini-toolbar media-transport">
         <button
           type="button"
           title="Воспроизвести"
           aria-label="Воспроизвести"
+          disabled={!canControlPlayback}
           onClick={() => runCommand("play")}
         >
           <Play size={19} />
         </button>
-        <button type="button" title="Пауза" aria-label="Пауза" onClick={() => runCommand("pause")}>
+        <button type="button" title="Пауза" aria-label="Пауза" disabled={!canControlPlayback}
+          onClick={() => runCommand("pause")}>
           <Pause size={19} />
         </button>
         <button
           type="button"
           title="Остановить"
           aria-label="Остановить"
+          disabled={!canControlPlayback}
           onClick={() => runCommand("stop")}
         >
           <Square size={19} />
@@ -399,6 +422,7 @@ function MediaControls({
           type="button"
           title="Сначала"
           aria-label="Сначала"
+          disabled={!canControlPlayback}
           onClick={() => runCommand("restart")}
         >
           <RotateCcw size={19} />
@@ -417,7 +441,7 @@ function MediaControls({
             min={0}
             max={videoTime.duration || 1}
             step={0.01}
-            disabled={!hasTime || videoTime.duration <= 0}
+            disabled={!canControlPlayback || !selectedStatus || videoTime.duration <= 0}
             value={Math.min(scrubbing ? scrubSeconds : videoTime.current, videoTime.duration || 1)}
             onChange={(event) => previewScrub(Number(event.target.value))}
             onPointerUp={commitScrub}
@@ -455,8 +479,8 @@ function MediaControls({
             ref={positionInputRef}
             type="text"
             inputMode="numeric"
-            disabled={selectedStatus?.player === "youtube" && videoTime.duration <= 0}
-            placeholder={selectedStatus || youtubePreview ? showHours ? "00:00:00" : "00:00" : "OFFLINE"}
+            disabled={!canControlPlayback || !selectedStatus || videoTime.duration <= 0}
+            placeholder={selectedStatus ? showHours ? "00:00:00" : "00:00" : "OFFLINE"}
             value={positionText}
             aria-invalid={Boolean(positionError)}
             aria-describedby={positionError ? "media-position-error" : undefined}
@@ -556,25 +580,29 @@ export function getPlaybackDisplayState(
 
 export function PlaybackStatusRow({
   label,
+  title,
   sources,
   selectedConnectionId,
   onSourceChange
 }: {
   label: string;
+  title?: string;
   sources: MediaStatus[];
   selectedConnectionId: string;
   onSourceChange: (id: string) => void;
 }) {
   return (
     <div className="media-playback-status" role="status" aria-live="polite">
-      <span className="media-playback-status-label">{label}</span>
+      <span className="media-playback-status-label" title={title ?? label}>{label}</span>
       <select
         aria-label="OBS source"
+        title={selectedConnectionId ? `OBS ${selectedConnectionId}` : "Automatic OBS source"}
         value={selectedConnectionId}
-        disabled={sources.length < 2}
         onChange={(event) => onSourceChange(event.target.value)}
       >
-        <option value="">No OBS</option>
+        <option value="">Auto</option>
+        {selectedConnectionId && !sources.some((source) => source.connectionId === selectedConnectionId) &&
+          <option value={selectedConnectionId}>OBS {selectedConnectionId.slice(0, 8)} (offline)</option>}
         {sources.map((source) => (
           <option key={source.connectionId} value={source.connectionId}>
             OBS {source.connectionId.slice(0, 8)}

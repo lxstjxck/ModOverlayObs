@@ -9,6 +9,7 @@ import {
 import { EyeOff } from "lucide-react";
 import { buildYouTubeEmbedUrl, isRenderableMediaUrl, unsafeMediaUrlMessage } from "../../shared/mediaUrl";
 import type { OverlayElement, StreamerView } from "../../shared/types";
+import type { MediaStatus } from "../../shared/mediaStatus";
 import { cropClipPath, getCrop, scaleCrop } from "../cropGeometry";
 import { sortElements } from "../utils";
 import { YouTubePlayerController } from "../youtubePlayer";
@@ -17,6 +18,8 @@ interface CanvasStageProps {
   mode: "workspace" | "overlay";
   streamer: StreamerView;
   elements: OverlayElement[];
+  mediaStatuses?: MediaStatus[];
+  selectedConnectionId?: string;
   selectedId?: string | null;
   onSelect?: (id: string) => void;
   onUpdate?: (id: string, patch: Partial<OverlayElement>) => void;
@@ -51,6 +54,8 @@ export function CanvasStage({
   mode,
   streamer,
   elements,
+  mediaStatuses = [],
+  selectedConnectionId = "",
   selectedId,
   onSelect,
   onUpdate,
@@ -424,7 +429,10 @@ export function CanvasStage({
               }}
               onPointerDown={(event) => startDrag(event, element, "move")}
             >
-              <ElementContent mode={mode} element={element} />
+              <ElementContent mode={mode} element={element} previewStatus={mode === "workspace"
+                ? mediaStatuses.find((status) => status.elementId === element.id &&
+                    (!selectedConnectionId || status.connectionId === selectedConnectionId) &&
+                    Date.now() - status.observedAt < 5000) : undefined} />
               {mode === "workspace" && selectedId === element.id && (
                 <ResizeHandles
                   onStart={(event, handle) => startDrag(event, element, "resize", handle)}
@@ -813,10 +821,12 @@ function SafeGuides() {
 
 function ElementContent({
   element,
-  mode
+  mode,
+  previewStatus
 }: {
   element: OverlayElement;
   mode: CanvasStageProps["mode"];
+  previewStatus?: MediaStatus;
 }) {
   if (element.type === "TEXT") {
     const props = element.props;
@@ -863,7 +873,7 @@ function ElementContent({
     });
     if (youtubeSrc) {
       return (
-        <YouTubeMedia key={youtubeSrc} element={element} mode={mode} src={youtubeSrc} />
+        <YouTubeMedia key={youtubeSrc} element={element} mode={mode} src={youtubeSrc} previewStatus={previewStatus} />
       );
     }
   }
@@ -912,14 +922,20 @@ function ElementContent({
   return <RetryImage key={element.src ?? ""} element={element} />;
 }
 
-function YouTubeMedia({ element, mode, src }: {
+function YouTubeMedia({ element, mode, src, previewStatus }: {
   element: OverlayElement;
   mode: CanvasStageProps["mode"];
   src: string;
+  previewStatus?: MediaStatus;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const controllerRef = useRef<YouTubePlayerController | null>(null);
   const disposeTimerRef = useRef<number | null>(null);
+  const previewStatusRef = useRef(previewStatus);
+  const commandId = element.props.playbackCommandId;
+  const commandPending = (typeof commandId === "string" || typeof commandId === "number") &&
+    previewStatus?.commandId !== String(commandId);
+  previewStatusRef.current = commandPending ? undefined : previewStatus;
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return undefined;
@@ -928,7 +944,10 @@ function YouTubeMedia({ element, mode, src }: {
       disposeTimerRef.current = null;
     }
     if (!controllerRef.current) {
-      controllerRef.current = new YouTubePlayerController(frame, () => frame.dispatchEvent(new Event("youtube:status")));
+      controllerRef.current = new YouTubePlayerController(frame, () => {
+        frame.dispatchEvent(new Event("youtube:status"));
+        if (mode === "workspace" && previewStatusRef.current) controllerRef.current?.syncPreview(previewStatusRef.current);
+      });
     }
     return () => {
       disposeTimerRef.current = window.setTimeout(() => {
@@ -938,6 +957,11 @@ function YouTubeMedia({ element, mode, src }: {
       }, 0);
     };
   }, [src]);
+  useEffect(() => {
+    if (mode !== "workspace" || !previewStatus) return;
+    if (commandPending) return;
+    controllerRef.current?.syncPreview(previewStatus);
+  }, [mode, previewStatus, commandPending]);
   useEffect(() => {
     controllerRef.current?.configure(
       mode === "overlay" ? element.liveVolume : element.previewVolume ?? 1,

@@ -136,6 +136,7 @@ export function ModeratorApp() {
   const [propertiesVisible, setPropertiesVisible] = useState(true);
   const [media, setMedia] = useState<MediaItem[]>([]);
   const [mediaStatuses, setMediaStatuses] = useState<MediaStatus[]>([]);
+  const [selectedConnectionId, setSelectedConnectionId] = useState("");
   const [mediaLoading, setMediaLoading] = useState(true);
   const [uploadingCount, setUploadingCount] = useState(0);
   const [connected, setConnected] = useState(false);
@@ -153,6 +154,18 @@ export function ModeratorApp() {
     moderators: []
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  useEffect(() => {
+    setSelectedConnectionId(streamer?.id
+      ? window.sessionStorage.getItem(`lxst-obs-source:${streamer.id}`) ?? "" : "");
+  }, [streamer?.id]);
+  function selectConnection(id: string) {
+    setSelectedConnectionId(id);
+    if (streamer?.id) {
+      const key = `lxst-obs-source:${streamer.id}`;
+      if (id) window.sessionStorage.setItem(key, id);
+      else window.sessionStorage.removeItem(key);
+    }
+  }
   const [error, setError] = useState("");
   const [mediaError, setMediaError] = useState("");
   const [mediaDeleteIds, setMediaDeleteIds] = useState<string[]>([]);
@@ -373,6 +386,9 @@ export function ModeratorApp() {
     () => preview.find((element) => element.id === selectedId) ?? null,
     [preview, selectedId]
   );
+  const previewConnectionId = selectedConnectionId || mediaStatuses
+    .filter((status) => status.elementId === selectedId && Date.now() - status.observedAt < 5000)
+    .sort((a, b) => a.connectionId.localeCompare(b.connectionId))[0]?.connectionId || "";
 
   useEffect(() => {
     if (selectedId && !preview.some((element) => element.id === selectedId)) {
@@ -945,6 +961,8 @@ export function ModeratorApp() {
             mode="workspace"
             streamer={streamer}
             elements={preview}
+            mediaStatuses={mediaStatuses}
+            selectedConnectionId={previewConnectionId}
             selectedId={selectedId}
             onSelect={(id) => setSelectedId(id || null)}
             onTransientUpdate={canEditCanvas ? updateTransformLocal : undefined}
@@ -966,6 +984,9 @@ export function ModeratorApp() {
         {propertiesVisible && <PropertiesPanel
           selected={selected}
           mediaStatuses={mediaStatuses.filter((status) => status.elementId === selected?.id)}
+          selectedConnectionId={selectedConnectionId}
+          onSourceChange={selectConnection}
+          canControlPlayback={canEditCanvas && connected}
           onUpdate={patchPreviewLocal}
           onDuplicate={() => {
             if (selectedId) {
