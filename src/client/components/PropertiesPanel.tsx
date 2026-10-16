@@ -1,6 +1,7 @@
 import { Copy, Eye, EyeOff, Pause, Play, RotateCcw, Square, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { OverlayElement } from "../../shared/types";
+import type { MediaStatus } from "../../shared/mediaStatus";
 import {
   isPlayableNode,
   seekMediaNode,
@@ -18,6 +19,7 @@ import { scaleCrop } from "../cropGeometry";
 
 interface PropertiesPanelProps {
   selected: OverlayElement | null;
+  mediaStatuses: MediaStatus[];
   onUpdate: (id: string, patch: Partial<OverlayElement>) => void;
   onDuplicate: () => void;
   onRemove: () => void;
@@ -25,6 +27,7 @@ interface PropertiesPanelProps {
 
 export function PropertiesPanel({
   selected,
+  mediaStatuses,
   onUpdate,
   onDuplicate,
   onRemove
@@ -49,17 +52,8 @@ export function PropertiesPanel({
       setVideoTime({ current: 0, duration: 0 });
       return observeYouTubeTime(mediaElement, setVideoTime);
     }
-    if (!mediaElement) {
-      setVideoTime({ current: 0, duration: 0 });
-      return undefined;
-    }
-    const interval = window.setInterval(() => {
-      setVideoTime({
-        current: mediaElement.currentTime || 0,
-        duration: Number.isFinite(mediaElement.duration) ? mediaElement.duration : 0
-      });
-    }, 250);
-    return () => window.clearInterval(interval);
+    setVideoTime({ current: 0, duration: 0 });
+    return undefined;
   }, [mediaElement]);
 
   if (!selected) {
@@ -158,8 +152,9 @@ export function PropertiesPanel({
         <MediaControls
           key={selected.id}
           selected={selected}
+          statuses={mediaStatuses}
           mediaElement={mediaElement}
-          videoTime={videoTime}
+          previewTime={videoTime}
           onSeek={(current) => setVideoTime((time) => ({ ...time, current }))}
           update={update}
         />
@@ -229,14 +224,16 @@ function TextStyleControls({
 
 function MediaControls({
   selected,
+  statuses,
   mediaElement,
-  videoTime,
+  previewTime,
   onSeek,
   update
 }: {
   selected: OverlayElement;
+  statuses: MediaStatus[];
   mediaElement: PlayableNode | null;
-  videoTime: { current: number; duration: number };
+  previewTime: { current: number; duration: number };
   onSeek: (current: number) => void;
   update: (patch: Partial<OverlayElement>) => void;
 }) {
@@ -250,22 +247,35 @@ function MediaControls({
   const positionDraftRef = useRef("00:00");
   const positionInputRef = useRef<HTMLInputElement>(null);
   const committedPositionRef = useRef(false);
+  const [sourceId, setSourceId] = useState("");
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 2000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const sources = statuses.filter((status) => now - status.observedAt < 5000)
+    .sort((a, b) => a.connectionId.localeCompare(b.connectionId));
+  const selectedStatus = sources.find((item) => item.connectionId === sourceId) ?? sources[0];
+  const youtubePreview = mediaElement instanceof HTMLIFrameElement;
+  const videoTime = selectedStatus
+    ? { current: selectedStatus.position, duration: selectedStatus.duration }
+    : youtubePreview ? previewTime : { current: 0, duration: 0 };
   const showHours = videoTime.duration >= 3600;
 
   useEffect(() => {
-    setPositionText("00:00");
+    setPositionText("");
     setPositionError("");
     setEditingPosition(false);
     setScrubbing(false);
     scrubSecondsRef.current = 0;
     scrubbingRef.current = false;
-    positionDraftRef.current = "00:00";
+    positionDraftRef.current = "";
   }, [selected.id]);
 
   useEffect(() => {
     if (!editingPosition && !positionError)
-      setPositionText(formatMediaPosition(videoTime.current, showHours));
-  }, [editingPosition, positionError, videoTime.current, showHours]);
+      setPositionText(selectedStatus || youtubePreview ? formatMediaPosition(videoTime.current, showHours) : "");
+  }, [editingPosition, positionError, videoTime.current, showHours, selectedStatus, youtubePreview]);
 
   function seek(seconds: number) {
     const bounded = Math.min(
@@ -282,8 +292,7 @@ function MediaControls({
         playbackCommandId: crypto.randomUUID()
       }
     });
-    setPositionText(formatMediaPosition(bounded, showHours));
-    positionDraftRef.current = formatMediaPosition(bounded, showHours);
+    // The OBS timecode changes only after the player reports its actual position.
     setPositionError("");
   }
 
@@ -316,7 +325,7 @@ function MediaControls({
   }
 
   function cancelPosition() {
-    const current = formatMediaPosition(videoTime.current, showHours);
+    const current = selectedStatus || youtubePreview ? formatMediaPosition(videoTime.current, showHours) : "";
     positionDraftRef.current = current;
     setPositionText(current);
     setPositionError("");
@@ -343,6 +352,16 @@ function MediaControls({
 
   return (
     <div className="video-controls">
+      <div className="field">
+        <span>{selectedStatus ? `OBS ${selectedStatus.connectionId.slice(0, 8)} · ${selectedStatus.playing ? "PLAYING" : "PAUSED"}` : youtubePreview ? "OBS OFFLINE · YouTube preview time" : "OBS OFFLINE · no telemetry"}</span>
+        {sources.length > 1 && (
+          <select aria-label="OBS source" value={selectedStatus.connectionId} onChange={(event) => setSourceId(event.target.value)}>
+            {sources.map((source) => <option key={source.connectionId} value={source.connectionId}>OBS {source.connectionId.slice(0, 8)}</option>)}
+          </select>
+        )}
+        {selectedStatus && typeof selected.props.playbackCommandId === "string" &&
+          selectedStatus.commandId !== selected.props.playbackCommandId && <span>Awaiting OBS confirmation</span>}
+      </div>
       <div className="mini-toolbar media-transport">
         <button
           type="button"
@@ -372,7 +391,7 @@ function MediaControls({
           <RotateCcw size={19} />
         </button>
       </div>
-      {mediaElement && (
+      {mediaElement && (selectedStatus || youtubePreview) && (
         <div className="media-timeline">
           <div className="media-timeline-times">
             <span>
@@ -425,7 +444,7 @@ function MediaControls({
             ref={positionInputRef}
             type="text"
             inputMode="numeric"
-            placeholder={showHours ? "00:00:00" : "00:00"}
+            placeholder={selectedStatus || youtubePreview ? showHours ? "00:00:00" : "00:00" : "OFFLINE"}
             value={positionText}
             aria-invalid={Boolean(positionError)}
             aria-describedby={positionError ? "media-position-error" : undefined}

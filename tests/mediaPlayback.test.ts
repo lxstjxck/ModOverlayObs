@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeYouTubeTime, playMediaNode, restartMediaNode, seekMediaNode } from "../src/client/mediaPlayback";
+import { applyPlaybackCommand } from "../src/client/pages/OverlayPage";
+import type { OverlayElement } from "../src/shared/types";
 
 class Media {
   currentTime = 0;
@@ -11,6 +13,28 @@ afterEach(() => {
 });
 
 describe("media seeking", () => {
+  it("keeps loop playing through reconnect and does not replay a persisted restart", () => {
+    class LoopingMedia extends Media {
+      loop = true;
+      paused = false;
+      play = vi.fn(async () => undefined);
+      pause = vi.fn(() => { this.paused = true; });
+    }
+    vi.stubGlobal("HTMLMediaElement", LoopingMedia);
+    const node = new LoopingMedia();
+    const element = { id: "video", props: { playbackCommand: "restart", playbackCommandId: "restart-1" } } as OverlayElement;
+    const applied = new Map<string, string>();
+    applyPlaybackCommand(element, node as HTMLMediaElement, applied);
+    node.currentTime = 37;
+    applyPlaybackCommand(element, node as HTMLMediaElement, applied);
+    expect(node.currentTime).toBe(37);
+    expect(node.loop).toBe(true);
+    expect(node.play).toHaveBeenCalledTimes(1);
+    applyPlaybackCommand({ ...element, props: { playbackCommand: "pause", playbackCommandId: "pause-2" } }, node as HTMLMediaElement, applied);
+    expect(node.pause).toHaveBeenCalledTimes(1);
+    applyPlaybackCommand({ ...element, props: { playbackCommand: "seek", playbackCommandId: "seek-3", seekSeconds: 52 } }, node as HTMLMediaElement, applied);
+    expect(node.currentTime).toBe(52);
+  });
   it("handles rejected browser play promises without exposing media URLs", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     class RejectingMedia extends Media {

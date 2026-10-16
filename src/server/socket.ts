@@ -1,8 +1,10 @@
 import type { Server as HttpServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { Server, type Socket } from "socket.io";
 import type { User } from "@prisma/client";
 import { ZodError } from "zod";
 import type { PermissionFlag, PresenceState } from "../shared/types";
+import { mediaStatusInputSchema } from "../shared/mediaStatus";
 import {
   elementPatchSchema,
   elementTransformSchema,
@@ -24,6 +26,7 @@ import { prisma } from "./db";
 import { resolveEmote } from "./emotes";
 import { hasPermission } from "./permissions";
 import { overlayReload } from "./overlayReload";
+import { MediaStatuses } from "./mediaStatuses";
 import { completeTts, overlayTtsDisconnected } from "./tts";
 import { isOriginAllowed, WindowRateLimiter } from "./security";
 import {
@@ -70,6 +73,8 @@ const socketEventLimiter = new WindowRateLimiter(300, 10_000);
 const socketTransformLimiter = new WindowRateLimiter(900, 10_000);
 const socketTransformBurstLimiter = new WindowRateLimiter(120, 1_000);
 const previewIdsByStreamer = new Map<string, Set<string>>();
+const playableIdsByStreamer = new Map<string, Set<string>>();
+const mediaStatuses = new MediaStatuses();
 const accessRecheckMs = 5_000;
 const moderatorSyncDeadlineMs = 10_000;
 let canvasIo: Server | null = null;
@@ -357,7 +362,16 @@ async function handleOverlayConnection(
   socket.on("disconnect", () => {
     if (config.ttsEnabled) overlayTtsDisconnected(socket.id);
     overlaysByStreamer.get(streamerId)?.delete(socket.id);
+    mediaStatuses.removeSocket(streamerId, socket.id);
+    io.to(moderatorRoom(streamerId)).emit("media:offline", { connectionId: socket.id });
     emitPresence(io, streamerId);
+  });
+  socket.on("media:status", (payload: unknown) => {
+    if (!socket.connected || !socketEventLimiter.consume(`media:status:${socket.id}`).allowed) return;
+    const parsed = mediaStatusInputSchema.safeParse(payload);
+    if (!parsed.success || !playableIdsByStreamer.get(streamerId)?.has(parsed.data.elementId)) return;
+    const status = mediaStatuses.update(streamerId, socket.id, parsed.data);
+    if (status) io.to(moderatorRoom(streamerId)).volatile.emit("media:status", status);
   });
   if (config.ttsEnabled) {
     socket.on("tts:done", ({ id }: { id?: unknown } = {}) => completeTts(socket.id, id, true));
@@ -373,7 +387,7 @@ async function handleOverlayConnection(
     if (await sceneNeedsRepair(streamerId, "preview")) return;
     const state = await getPreviewState(streamerId);
     if (sceneStateBytes(state) > maxLegacySceneBroadcastBytes) return;
-    if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, state);
+    rememberPreviewIds(streamerId, state);
     socket.emit("overlay:state", state);
   });
   emitPresence(io, streamerId);
@@ -408,7 +422,7 @@ async function handleModeratorConnection(
       if (sceneStateBytes(initialPreview) > maxLegacySceneBroadcastBytes) {
         socket.emit("scene:repair", { kind: "preview", items: await getSceneRepairItems(streamerId, "preview") });
       } else {
-        if (!previewIdsByStreamer.has(streamerId)) rememberPreviewIds(streamerId, initialPreview);
+        rememberPreviewIds(streamerId, initialPreview);
         socket.emit("preview:state", initialPreview);
       }
     }
@@ -421,6 +435,7 @@ async function handleModeratorConnection(
       } else socket.emit("live:state", live);
     }
   });
+  socket.emit("media:statuses", mediaStatuses.snapshot(streamerId).filter((status) => Date.now() - status.observedAt < 5000));
   emitPresence(io, streamerId);
   let transformOrdinal = 0;
   let forwardedTransformOrdinal = 0;
@@ -608,7 +623,7 @@ async function handleModeratorConnection(
               : eventName === "video:live:stop"
                 ? "video:stop"
                 : "video:restart";
-        io.to(overlayRoom(streamerId)).emit(overlayEvent, { id: parsed.id });
+        io.to(overlayRoom(streamerId)).emit(overlayEvent, { id: parsed.id, commandId: randomUUID() });
       });
     });
   }
@@ -689,6 +704,9 @@ async function emitPreviewState(io: Server, streamerId: string): Promise<void> {
 
 function rememberPreviewIds(streamerId: string, state: { id: string }[]): void {
   previewIdsByStreamer.set(streamerId, new Set(state.map((item) => item.id)));
+  const playable = new Set(state.filter((item) => "type" in item && (item.type === "VIDEO" || item.type === "AUDIO")).map((item) => item.id));
+  playableIdsByStreamer.set(streamerId, playable);
+  mediaStatuses.retainElements(streamerId, playable);
 }
 
 async function emitLiveState(io: Server, streamerId: string): Promise<void> {

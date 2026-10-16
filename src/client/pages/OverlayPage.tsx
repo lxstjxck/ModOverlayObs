@@ -35,6 +35,25 @@ export function OverlayPage({ token }: { token: string }) {
   const socketRef = useRef<Socket | null>(null);
   const appliedCommandKeys = useRef(new Map<string, string>());
   const canonicalCanvas = useRef<OverlayElement[]>([]);
+  const onAirRef = useRef<OverlayElement[]>([]);
+  const lastStatusSent = useRef(new Map<string, number>());
+
+  const reportStatus = (id: string, force = false) => {
+    const socket = socketRef.current;
+    const media = getPlayableMedia(id);
+    if (!socket?.connected || !(media instanceof HTMLMediaElement)) return;
+    const now = Date.now();
+    if (!force && now - (lastStatusSent.current.get(id) ?? 0) < 1000) return;
+    lastStatusSent.current.set(id, now);
+    socket.emit("media:status", {
+      elementId: id,
+      connectionId: socket.id,
+      position: Number.isFinite(media.currentTime) ? Math.min(86400, Math.max(0, media.currentTime)) : 0,
+      duration: Number.isFinite(media.duration) ? Math.min(86400, Math.max(0, media.duration)) : 0,
+      playing: !media.paused && !media.ended,
+      commandId: appliedCommandKeys.current.get(id) ?? null
+    });
+  };
 
   useEffect(() => {
     document.documentElement.classList.add("overlay-document");
@@ -63,12 +82,18 @@ export function OverlayPage({ token }: { token: string }) {
       setCanvas([]);
       canonicalCanvas.current = [];
       appliedCommandKeys.current.clear();
+      lastStatusSent.current.clear();
       setStreamer(defaultStreamer);
       streamerRef.current = defaultStreamer;
     };
     socket.on("canvas:state", (value: StreamerView) => {
       streamerRef.current = value;
       setStreamer(value);
+    });
+    socket.on("connect", () => {
+      window.setTimeout(() => {
+        for (const element of onAirRef.current) reportStatus(element.id, true);
+      }, 0);
     });
     socket.on("access:revoked", clearCanvas);
     socket.on("disconnect", (reason) => {
@@ -80,7 +105,13 @@ export function OverlayPage({ token }: { token: string }) {
     });
     socket.on("overlay:state", (state: OverlayElement[]) => {
       canonicalCanvas.current = state;
+      const ids = new Set(state.map((element) => element.id));
+      for (const id of appliedCommandKeys.current.keys()) if (!ids.has(id)) appliedCommandKeys.current.delete(id);
+      for (const id of lastStatusSent.current.keys()) if (!ids.has(id)) lastStatusSent.current.delete(id);
       setCanvas(state);
+      window.setTimeout(() => {
+        for (const element of state) reportStatus(element.id, true);
+      }, 0);
       if (pendingAttempt) {
         socket.emit("overlay:reload:ready", { attemptId: pendingAttempt });
         window.sessionStorage.removeItem(storageKey);
@@ -123,14 +154,26 @@ export function OverlayPage({ token }: { token: string }) {
     socket.on("overlay:update", (element: OverlayElement) =>
       setCanvas((items) => items.map((item) => (item.id === element.id ? element : item)))
     );
-    socket.on("overlay:remove", ({ id }: { id: string }) =>
-      setCanvas((items) => items.filter((item) => item.id !== id))
-    );
-    socket.on("overlay:clear", () => setCanvas([]));
-    socket.on("video:play", ({ id }: { id: string }) => playMediaNode(getPlayableMedia(id)));
-    socket.on("video:pause", ({ id }: { id: string }) => pauseMediaNode(getPlayableMedia(id)));
-    socket.on("video:stop", ({ id }: { id: string }) => stopMediaNode(getPlayableMedia(id)));
-    socket.on("video:restart", ({ id }: { id: string }) => restartMediaNode(getPlayableMedia(id)));
+    socket.on("overlay:remove", ({ id }: { id: string }) => {
+      appliedCommandKeys.current.delete(id);
+      lastStatusSent.current.delete(id);
+      setCanvas((items) => items.filter((item) => item.id !== id));
+    });
+    socket.on("overlay:clear", () => {
+      appliedCommandKeys.current.clear();
+      lastStatusSent.current.clear();
+      setCanvas([]);
+    });
+    for (const [eventName, command] of [["video:play", "play"], ["video:pause", "pause"], ["video:stop", "stop"], ["video:restart", "restart"]] as const) {
+      socket.on(eventName, ({ id, commandId }: { id: string; commandId?: string }) => {
+        if (commandId && appliedCommandKeys.current.get(id) === commandId) return;
+        const media = getPlayableMedia(id);
+        if (!media) return;
+        if (commandId) appliedCommandKeys.current.set(id, commandId);
+        runPlaybackCommand(command, media);
+        window.setTimeout(() => reportStatus(id, true), 100);
+      });
+    }
     socket.on("tts:play", ({ id, url }: { id: string; url: string }) => {
       stopTts();
       if (!url.startsWith("/api/tts/audio/") || !/^[A-Za-z0-9_-]{43}$/.test(id)) return;
@@ -170,6 +213,7 @@ export function OverlayPage({ token }: { token: string }) {
     () => displayElements.filter((element) => isElementInViewport(element, streamer)),
     [displayElements, streamer]
   );
+  onAirRef.current = onAirElements;
 
   useLayoutEffect(() => {
     for (const element of displayElements) {
@@ -196,8 +240,32 @@ export function OverlayPage({ token }: { token: string }) {
         setMediaNodeVolume(media, element.liveVolume);
         setMediaNodeMuted(media, element.muted);
         applyPlaybackCommand(element, media, appliedCommandKeys.current);
+        reportStatus(element.id, true);
       }
     }
+  }, [onAirElements]);
+
+  useEffect(() => {
+    const disposers: Array<() => void> = [];
+    for (const element of onAirElements) {
+      const media = getPlayableMedia(element.id);
+      if (!(media instanceof HTMLMediaElement)) continue;
+      const report = () => reportStatus(element.id, true);
+      const tick = () => reportStatus(element.id);
+      for (const name of ["play", "pause", "seeked", "loadedmetadata", "durationchange", "ended"]) {
+        media.addEventListener(name, report);
+        disposers.push(() => media.removeEventListener(name, report));
+      }
+      media.addEventListener("timeupdate", tick);
+      disposers.push(() => media.removeEventListener("timeupdate", tick));
+    }
+    const timer = window.setInterval(() => {
+      for (const element of onAirRef.current) reportStatus(element.id);
+    }, 1000);
+    return () => {
+      disposers.forEach((dispose) => dispose());
+      window.clearInterval(timer);
+    };
   }, [onAirElements]);
 
   return (
@@ -218,7 +286,7 @@ function getStageElement(id: string): HTMLElement | null {
   );
 }
 
-function applyPlaybackCommand(
+export function applyPlaybackCommand(
   element: OverlayElement,
   media: PlayableNode,
   applied: Map<string, string>
@@ -243,15 +311,16 @@ function applyPlaybackCommand(
   if (command === "seek") {
     const seconds = element.props.seekSeconds;
     if (typeof seconds === "number") seekMediaNode(media, seconds);
-  } else if (command === "play") {
-    playMediaNode(media);
-  } else if (command === "pause") {
-    pauseMediaNode(media);
-  } else if (command === "stop") {
-    stopMediaNode(media);
   } else {
-    restartMediaNode(media);
+    runPlaybackCommand(command, media);
   }
+}
+
+function runPlaybackCommand(command: "play" | "pause" | "stop" | "restart", media: PlayableNode): void {
+  if (command === "play") playMediaNode(media);
+  else if (command === "pause") pauseMediaNode(media);
+  else if (command === "stop") stopMediaNode(media);
+  else restartMediaNode(media);
 }
 
 function isElementInViewport(element: OverlayElement, streamer: StreamerView): boolean {

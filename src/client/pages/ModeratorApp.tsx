@@ -25,6 +25,7 @@ import { LayersPanel } from "../components/LayersPanel";
 import { MediaLibrary } from "../components/MediaLibrary";
 import { EmotesPanel } from "../components/EmotesPanel";
 import { PropertiesPanel } from "../components/PropertiesPanel";
+import type { MediaStatus } from "../../shared/mediaStatus";
 import { LoadingScreen } from "../components/ui/LoadingSpinner";
 import { reconcilePreview } from "../previewSync";
 import { fitInitialMediaDimensions, readMediaDimensions } from "../mediaDimensions";
@@ -134,6 +135,7 @@ export function ModeratorApp() {
   const [streamer, setStreamer] = useState<StreamerView | null>(null);
   const [propertiesVisible, setPropertiesVisible] = useState(true);
   const [media, setMedia] = useState<MediaItem[]>([]);
+  const [mediaStatuses, setMediaStatuses] = useState<MediaStatus[]>([]);
   const [mediaLoading, setMediaLoading] = useState(true);
   const [uploadingCount, setUploadingCount] = useState(0);
   const [connected, setConnected] = useState(false);
@@ -298,6 +300,7 @@ export function ModeratorApp() {
       );
     });
     socket.on("disconnect", () => {
+      setMediaStatuses([]);
       setConnected(false);
       setConnectionIssue(true);
       history.current = { undo: [], redo: [] };
@@ -320,6 +323,17 @@ export function ModeratorApp() {
       );
     });
     socket.on("presence:update", (state: PresenceState) => setPresence(state));
+    socket.on("media:statuses", (statuses: MediaStatus[]) =>
+      setMediaStatuses(statuses.map((status) => ({ ...status, observedAt: Date.now() }))));
+    socket.on("media:status", (status: MediaStatus) => {
+      const received = { ...status, observedAt: Date.now() };
+      setMediaStatuses((current) => [...current.filter((item) =>
+        item.connectionId !== status.connectionId || item.elementId !== status.elementId
+      ), received]);
+    });
+    socket.on("media:offline", ({ connectionId }: { connectionId: string }) => {
+      setMediaStatuses((current) => current.filter((item) => item.connectionId !== connectionId));
+    });
     socket.on("app:error", (message: string) => setError(message));
     socket.on("scene:repair", (notice: SceneRepairNotice) => {
       setSceneRepair((current) => ({ ...current, [notice.kind]: notice.items }));
@@ -951,6 +965,7 @@ export function ModeratorApp() {
 
         {propertiesVisible && <PropertiesPanel
           selected={selected}
+          mediaStatuses={mediaStatuses.filter((status) => status.elementId === selected?.id)}
           onUpdate={patchPreviewLocal}
           onDuplicate={() => {
             if (selectedId) {

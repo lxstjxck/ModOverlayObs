@@ -2641,3 +2641,103 @@ describe("login throttling", () => {
     expect(statuses[30]).toBe(429);
   });
 });
+
+describe("OBS playback telemetry", () => {
+  // This suite shares the server's 60-second connection limiter with earlier integration tests.
+  beforeAll(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 60_100));
+  }, 65_000);
+
+  it("removes telemetry when the OBS token is rotated", async () => {
+    const { sessionToken } = await bindTestTwitchOwner();
+    const video = await prisma.previewElement.create({ data: {
+      streamerId, type: "VIDEO", name: "Revoked", src: "https://example.com/revoked.mp4"
+    } });
+    const editor = await socketClient({ session: sessionToken, channelId: streamerId });
+    const obs = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const received = event(editor, "media:status");
+    obs.emit("media:status", { elementId: video.id, connectionId: obs.id,
+      position: 9, duration: 90, playing: true, commandId: null });
+    await received;
+    const offline = event<{ connectionId: string }>(editor, "media:offline");
+    const disconnected = event(obs, "disconnect");
+    const id = obs.id;
+    const response = await fetch(`${baseUrl}/api/obs/regenerate`, {
+      method: "POST", headers: { ...headers(sessionToken), "X-Channel-Id": streamerId }
+    });
+    expect(response.status).toBe(200);
+    await disconnected;
+    expect(await offline).toEqual({ connectionId: id });
+    await socketClient({ overlayToken: "overlay-old" }, "connect_error");
+  });
+
+  it("restores actual positions after reconnect, separates OBS sources, and clears disconnected status", async () => {
+    const video = await prisma.previewElement.create({ data: {
+      streamerId, type: "VIDEO", name: "Loop", src: "https://example.com/loop.mp4", loop: true
+    } });
+    const editor = await socketClient({ session: "owner-session" });
+    const obs1 = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const obs2 = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const report = (obs: Socket, position: number, commandId: string | null = null) =>
+      obs.emit("media:status", { elementId: video.id, connectionId: obs.id,
+        position, duration: 90, playing: true, commandId });
+    const first = event<{ position: number; connectionId: string }>(editor, "media:status");
+    report(obs1, 12);
+    expect(await first).toMatchObject({ position: 12, connectionId: obs1.id });
+    const second = event<{ position: number; connectionId: string }>(editor, "media:status");
+    report(obs2, 47);
+    expect(await second).toMatchObject({ position: 47, connectionId: obs2.id });
+
+    const snapshotEditor = connect(baseUrl, { transports: ["websocket"], reconnection: false,
+      autoConnect: false, extraHeaders: { Cookie: headers().Cookie }, query: { channelId: streamerId } });
+    clients.push(snapshotEditor);
+    const snapshot = event<Array<{ connectionId: string; position: number }>>(snapshotEditor, "media:statuses");
+    snapshotEditor.connect();
+    expect(await snapshot).toEqual(expect.arrayContaining([
+      expect.objectContaining({ connectionId: obs1.id, position: 12 }),
+      expect.objectContaining({ connectionId: obs2.id, position: 47 })
+    ]));
+
+    const offline = event<{ connectionId: string }>(editor, "media:offline");
+    const disconnectedId = obs1.id;
+    obs1.disconnect();
+    expect(await offline).toEqual({ connectionId: disconnectedId });
+    const returned = await socketClient({ overlayToken: "overlay-old" }, "overlay:state");
+    const restored = event<{ position: number; commandId: string | null }>(editor, "media:status");
+    report(returned, 63, "seek-after-reconnect");
+    expect(await restored).toMatchObject({ position: 63, commandId: "seek-after-reconnect" });
+    const pauseState = event<Array<{ id: string; props: Record<string, unknown> }>>(returned, "overlay:state");
+    expect(await editor.timeout(3000).emitWithAck("preview:update", { id: video.id,
+      patch: { props: { playbackCommand: "pause", playbackCommandId: "pause-after-reconnect" } } })).toBe(true);
+    expect((await pauseState).find((item) => item.id === video.id)?.props.playbackCommand).toBe("pause");
+    const paused = event<{ position: number; playing: boolean; commandId: string | null }>(editor, "media:status");
+    returned.emit("media:status", { elementId: video.id, connectionId: returned.id,
+      position: 63, duration: 90, playing: false, commandId: "pause-after-reconnect" });
+    expect(await paused).toMatchObject({ position: 63, playing: false, commandId: "pause-after-reconnect" });
+    const seekState = event<Array<{ id: string; props: Record<string, unknown> }>>(returned, "overlay:state");
+    expect(await editor.timeout(3000).emitWithAck("preview:update", { id: video.id,
+      patch: { props: { playbackCommand: "seek", playbackCommandId: "seek-after-pause", seekSeconds: 25 } } })).toBe(true);
+    expect((await seekState).find((item) => item.id === video.id)?.props.seekSeconds).toBe(25);
+    const sought = event<{ position: number; commandId: string | null }>(editor, "media:status");
+    returned.emit("media:status", { elementId: video.id, connectionId: returned.id,
+      position: 25, duration: 90, playing: false, commandId: "seek-after-pause" });
+    expect(await sought).toMatchObject({ position: 25, commandId: "seek-after-pause" });
+    expect((await prisma.previewElement.findUniqueOrThrow({ where: { id: video.id } })).propsJson).not.toContain('"position"');
+  });
+
+  it("rejects forged connection and cross-channel element IDs", async () => {
+    const video = await prisma.previewElement.create({ data: {
+      streamerId, type: "VIDEO", name: "Own", src: "https://example.com/own.mp4"
+    } });
+    const foreign = await prisma.streamer.create({ data: { displayName: "Foreign", overlayToken: "foreign-telemetry" } });
+    const obs = await socketClient({ overlayToken: foreign.overlayToken }, "overlay:state");
+    obs.emit("media:status", { elementId: video.id, connectionId: obs.id, position: 50,
+      duration: 90, playing: true, commandId: null });
+    const ownEditor = connect(baseUrl, { transports: ["websocket"], reconnection: false,
+      autoConnect: false, extraHeaders: { Cookie: headers().Cookie }, query: { channelId: streamerId } });
+    clients.push(ownEditor);
+    const snapshot = event<unknown[]>(ownEditor, "media:statuses");
+    ownEditor.connect();
+    expect(await snapshot).toEqual([]);
+  });
+});
